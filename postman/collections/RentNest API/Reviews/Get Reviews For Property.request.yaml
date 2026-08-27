@@ -1,6 +1,0 @@
-$kind: http-request
-url: "{{baseUrl}}/api/reviews/property/:propertyId"
-method: GET
-pathVariables:
-  propertyId: ""
-order: 1000

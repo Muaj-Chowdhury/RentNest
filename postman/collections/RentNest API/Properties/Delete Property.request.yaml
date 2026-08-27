@@ -1,6 +1,0 @@
-$kind: http-request
-url: "{{baseUrl}}/api/properties/:id"
-method: DELETE
-pathVariables:
-  id: ""
-order: 5000
