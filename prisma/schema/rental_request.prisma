@@ -1,0 +1,22 @@
+model RentalRequest {
+  id         String              @id @default(uuid())
+  propertyId String
+  property   Property            @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  tenantId   String
+  tenant     User                @relation("TenantRequests", fields: [tenantId], references: [id], onDelete: Cascade)
+  status     RentalRequestStatus @default(PENDING)
+  // Set when a landlord/admin approves the request. The payment reservation
+  // expiry job uses this timestamp instead of createdAt because a request may
+  // wait in PENDING for days before it is approved.
+  approvedAt DateTime?
+  payment    Payment?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  //indexes
+  @@index([propertyId])
+  @@index([tenantId])
+  @@index([status])
+  @@index([status, approvedAt])
+  @@map("rental_requests")
+}

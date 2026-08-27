@@ -1,0 +1,13 @@
+$kind: http-request
+url: "{{baseUrl}}/api/payments/cancel"
+method: POST
+headers:
+  Content-Type: application/x-www-form-urlencoded
+body:
+  type: urlencoded
+  content:
+    status: CANCELLED
+    tran_id: "{{transactionId}}"
+    verify_sign: "{{verifySign}}"
+    verify_key: "{{verifyKey}}"
+order: 8000

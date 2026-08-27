@@ -1,0 +1,12 @@
+$kind: http-request
+url: "{{baseUrl}}/api/payments/success"
+method: POST
+headers:
+  Content-Type: application/x-www-form-urlencoded
+body:
+  type: urlencoded
+  content:
+    status: VALID
+    tran_id: "{{transactionId}}"
+    val_id: "{{validationId}}"
+order: 6000

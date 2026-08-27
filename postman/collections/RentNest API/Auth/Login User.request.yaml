@@ -1,0 +1,14 @@
+$kind: http-request
+name: Login User
+url: "{{baseUrl}}/api/auth/login"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "email": "2ndlandlord@example.com",
+      "password": "12345678"
+    }
+order: 2000

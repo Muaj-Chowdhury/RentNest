@@ -1,0 +1,15 @@
+$kind: http-request
+url: "{{baseUrl}}/api/reviews"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "propertyId": "PROPERTY_ID_HERE",
+      "tenantId": "TENANT_ID_HERE",
+      "rating": 5,
+      "comment": "Great stay!"
+    }
+order: 2000

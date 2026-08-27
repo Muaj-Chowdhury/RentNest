@@ -1,0 +1,53 @@
+model Payment {
+  id String @id @default(uuid())
+
+  rentalRequestId String        @unique
+  rentalRequest   RentalRequest @relation(fields: [rentalRequestId], references: [id], onDelete: Cascade)
+
+  transactionId String          @unique
+  provider      PaymentProvider
+
+  amount   Decimal @db.Decimal(10, 2)
+  currency String  @default("BDT") @db.VarChar(3)
+
+  status PaymentStatus @default(PENDING)
+
+  attempts PaymentAttempt[]
+
+  gatewaySessionId String?
+  gatewayPageUrl   String?
+  validationId     String?
+
+  paidAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@map("payments")
+}
+
+model PaymentAttempt {
+  id String @id @default(uuid())
+
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)//relation type is one to many, one payment can have multiple attempts
+
+  transactionId String        @unique
+  amount        Decimal       @db.Decimal(10, 2)
+  currency      String        @default("BDT") @db.VarChar(3)
+  status        PaymentStatus @default(PENDING)
+
+  gatewaySessionId String?
+  gatewayPageUrl   String?
+  validationId     String?
+  failureReason    String?
+  paidAt           DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([paymentId])
+  @@index([status])
+  @@map("payment_attempts")
+}

@@ -1,0 +1,19 @@
+$kind: http-request
+url: "{{baseUrl}}/api/payments/ipn"
+method: POST
+headers:
+  Content-Type: application/x-www-form-urlencoded
+body:
+  type: urlencoded
+  content:
+    status: VALID
+    tran_id: "{{transactionId}}"
+    val_id: "{{validationId}}"
+    amount: "15000.00"
+    currency: BDT
+    currency_type: BDT
+    bank_tran_id: BANK_TRANSACTION_ID
+    risk_level: "0"
+    verify_sign: "{{verifySign}}"
+    verify_key: "{{verifyKey}}"
+order: 5000

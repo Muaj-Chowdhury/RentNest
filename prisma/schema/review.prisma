@@ -1,0 +1,18 @@
+model Review {
+  id         String   @id @default(uuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  tenantId   String
+  tenant     User     @relation("TenantReviews", fields: [tenantId], references: [id], onDelete: Cascade)
+  rating     Int
+  comment    String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  //indexes
+  @@index([propertyId])
+  @@index([tenantId])
+    // Add this line to prevent duplicate entries at the database level
+  @@unique([tenantId, propertyId])
+  @@map("reviews")
+}

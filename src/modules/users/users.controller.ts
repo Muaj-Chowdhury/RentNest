@@ -1,42 +1,30 @@
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response } from "express";
 import { UsersService } from "./users.service";
+import { catchAsync } from "../../utils/catchAsync";
 
 const usersService = new UsersService();
 
 export class UsersController {
-  async getAllUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const users = await usersService.getAllUsers();
-      res.status(200).json(users);
-    } catch (error) {
-      next(error);
-    }
-  }
+  getAllUsers = catchAsync(async (_req: Request, res: Response) => {
+    const users = await usersService.getAllUsers();
+    res.status(200).json(users);
+  });
 
-  async getUserById(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const user = await usersService.getUserById(req.params.id);
-      res.status(200).json(user);
-    } catch (error) {
-      next(error);
-    }
-  }
+  getUserById = catchAsync(async (req: Request, res: Response) => {
+    const id = typeof req.params.id === "string" ? req.params.id : "";
+    const user = await usersService.getUserById(id);
+    res.status(200).json(user);
+  });
 
-  async updateUser(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const updatedUser = await usersService.updateUser(req.params.id, req.body);
-      res.status(200).json(updatedUser);
-    } catch (error) {
-      next(error);
-    }
-  }
+  updateUser = catchAsync(async (req: Request, res: Response) => {
+    const id = typeof req.params.id === "string" ? req.params.id : "";
+    const updatedUser = await usersService.updateUser(id, req.body);
+    res.status(200).json(updatedUser);
+  });
 
-  async deleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const result = await usersService.deleteUser(req.params.id);
-      res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
-  }
+  deleteUser = catchAsync(async (req: Request, res: Response) => {
+    const id = typeof req.params.id === "string" ? req.params.id : "";
+    const result = await usersService.deleteUser(id);
+    res.status(200).json(result);
+  });
 }

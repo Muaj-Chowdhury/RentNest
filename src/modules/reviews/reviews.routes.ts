@@ -8,4 +8,4 @@ router.get("/property/:propertyId", reviewsController.getReviewsForProperty);
 router.post("/", reviewsController.createReview);
 router.delete("/:id", reviewsController.deleteReview);
 
-export default router;
+export const reviewRoutes = router;

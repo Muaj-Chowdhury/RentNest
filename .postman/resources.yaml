@@ -1,0 +1,15 @@
+# Use this workspace to collaborate
+workspace:
+  id: ff9c4995-2fde-4e52-86d3-f93d2216d229
+
+localResources:
+  collections:
+    - ../rentnest-postman-collection.json
+  environments:
+    - ../rentnest-postman-environment.json
+
+# Each entry here maps a local resource to one or more corresponding objects in Postman Cloud
+
+cloudResources:
+  collections:
+    ../postman/collections/RentNest API: 6b0ef65a-dec3-417e-bea8-390d4a07a4b3

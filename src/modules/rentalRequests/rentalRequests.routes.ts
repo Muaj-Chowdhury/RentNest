@@ -1,12 +1,18 @@
 import { Router } from "express";
 import { RentalRequestsController } from "./rentalRequests.controller";
+import { auth } from "../../middlewares/auth";
+import { Role } from "../../../generated/prisma/enums";
 
 const router = Router();
 const rentalRequestsController = new RentalRequestsController();
 
-router.get("/", rentalRequestsController.getAllRequests);
-router.get("/:id", rentalRequestsController.getRequestById);
-router.post("/", rentalRequestsController.createRequest);
-router.patch("/:id/status", rentalRequestsController.updateRequestStatus);
+router.get(
+  "/",
+  auth(Role.TENANT, Role.LANDLORD, Role.ADMIN),
+  rentalRequestsController.getAllRequests,
+);
+router.get("/:id",auth(Role.TENANT, Role.LANDLORD, Role.ADMIN), rentalRequestsController.getRequestById);
+router.post("/",auth(Role.TENANT), rentalRequestsController.createRequest);
+router.patch("/:id/status",auth(Role.LANDLORD, Role.ADMIN), rentalRequestsController.updateRequestStatus);
 
-export default router;
+export const rentalRequestRoutes = router;

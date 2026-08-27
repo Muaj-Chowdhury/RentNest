@@ -1,0 +1,14 @@
+$kind: http-request
+url: "{{baseUrl}}/api/rental-requests/:id/status"
+method: PATCH
+headers:
+  Content-Type: application/json
+pathVariables:
+  id: ""
+body:
+  type: text
+  content: |-
+    {
+      "status": "APPROVED"
+    }
+order: 4000
