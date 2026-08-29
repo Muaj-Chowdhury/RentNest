@@ -6,10 +6,10 @@ export interface ICreateReviewPayload {
 export const ReviewSortFields = ["createdAt", "rating"] as const;
 export type  ReviewSortField = typeof ReviewSortFields[number];
 export interface IReviewQuery {
-    rating: number;
-    comment: string;
-    page: number;
-    limit: number;
-    sortBy: string;
-    sortOrder: string;
+    rating?: number;
+    comment?: string;
+    page?: number;
+    limit?: number;
+    sortBy?: ReviewSortField;
+    sortOrder?: "asc" | "desc";
 }

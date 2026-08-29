@@ -4,6 +4,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import { globalErrorHandler } from "./middlewares/globalErrorHandler";
 import { userRoutes } from "./modules/users/users.routes";
+import { adminUserRoutes } from "./modules/users/adminUsers.routes";
 import { authRoutes } from "./modules/auth/auth.routes";
 import { paymentRoutes } from "./modules/payments/payments.routes";
 import { rentalRequestRoutes } from "./modules/rentalRequests/rentalRequests.routes";
@@ -28,6 +29,7 @@ app.get("/", (req: Request, res: Response) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/admin/users", adminUserRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/properties", propertyRoutes);

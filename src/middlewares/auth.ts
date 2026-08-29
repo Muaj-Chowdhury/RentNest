@@ -7,6 +7,7 @@ import config from "../config";
 import prisma from "../lib/prisma";
 import { catchAsync } from "../utils/catchAsync";
 import { verifyToken } from "../utils/jwt";
+import { AppError } from "../errors/AppError";
 
 declare global {
   namespace Express {
@@ -29,10 +30,10 @@ export const auth = (...requiredRoles: Role[]) => {
         : req.headers.authorization;
 
     if (!token) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
     const verifiedToken = verifyToken(token, config.jwt_access_secret);
-    if (!verifiedToken.success) throw new Error(verifiedToken.error);
+    if (!verifiedToken.success) throw new AppError("Invalid or expired token", 401);
 
     const { name, email, id, role } = verifiedToken.data as JwtPayload & {
       id: string;
@@ -42,8 +43,9 @@ export const auth = (...requiredRoles: Role[]) => {
     };
 
     if (!requiredRoles.includes(role)) {
-      throw new Error(
+      throw new AppError(
         "Forbidden. You don't have permission to access this resource.",
+        403,
       );
     }
     const user = await prisma.user.findUnique({
@@ -51,10 +53,10 @@ export const auth = (...requiredRoles: Role[]) => {
     });
 
     if (!user) {
-      throw new Error("User not found");
+      throw new AppError("User not found", 404);
     }
     if (user.status !== "ACTIVE") {
-      throw new Error("User is not active");
+      throw new AppError("User is not active", 403);
     }
     req.user = {
       email,

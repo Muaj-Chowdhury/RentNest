@@ -1,11 +1,16 @@
 import { Prisma } from "../../../generated/prisma/client";
-import { Role, RentalRequestStatus } from "../../../generated/prisma/enums";
+import {
+  PaymentStatus,
+  Role,
+  RentalRequestStatus,
+} from "../../../generated/prisma/enums";
 import prisma from "../../lib/prisma";
 import {
   IRentalRequestPayload,
   IRentalRequestQuery,
   RentalRequestStatusField,
 } from "./rentalRequests.interface";
+import { AppError } from "../../errors/AppError";
 type RequestActor = {
   id: string;
   role: Role;
@@ -306,6 +311,137 @@ export class RentalRequestsService {
                 title: true,
                 location: true,
                 rent: true,
+              },
+            },
+            tenant: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        });
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+  }
+
+  async completeRequest(id: string, actor: RequestActor) {
+    if (!id) {
+      throw new AppError("Request ID is required", 400);
+    }
+
+    if (actor.role !== Role.LANDLORD && actor.role !== Role.ADMIN) {
+      throw new AppError(
+        "Only landlords and admins can complete a rental",
+        403,
+      );
+    }
+
+    return prisma.$transaction(
+      async (tx) => {
+        const request = await tx.rentalRequest.findUnique({
+          where: { id },
+          select: {
+            id: true,
+            status: true,
+            propertyId: true,
+            payment: {
+              select: {
+                status: true,
+              },
+            },
+            property: {
+              select: {
+                landlordId: true,
+              },
+            },
+          },
+        });
+
+        if (!request) {
+          throw new AppError("Rental request not found", 404);
+        }
+
+        if (
+          actor.role !== Role.ADMIN &&
+          request.property.landlordId !== actor.id
+        ) {
+          throw new AppError("Unauthorized to complete this rental", 403);
+        }
+
+        if (request.status !== RentalRequestStatus.ACTIVE) {
+          throw new AppError(
+            `Only active rentals can be completed. Current status is ${request.status}`,
+            409,
+          );
+        }
+
+        if (request.payment?.status !== PaymentStatus.COMPLETED) {
+          throw new AppError(
+            "A rental cannot be completed before verified payment",
+            409,
+          );
+        }
+
+        const updatedRequest = await tx.rentalRequest.updateMany({
+          where: {
+            id,
+            status: RentalRequestStatus.ACTIVE,
+          },
+          data: {
+            status: RentalRequestStatus.COMPLETED,
+          },
+        });
+
+        if (updatedRequest.count === 0) {
+          throw new AppError("Only active rentals can be completed", 409);
+        }
+
+        // Keep a property unavailable while another approved or active
+        // reservation still owns it. This makes completion safe if future
+        // business rules allow overlapping requests.
+        const anotherReservation = await tx.rentalRequest.findFirst({
+          where: {
+            propertyId: request.propertyId,
+            id: { not: id },
+            status: {
+              in: [RentalRequestStatus.APPROVED, RentalRequestStatus.ACTIVE],
+            },
+          },
+          select: { id: true },
+        });
+
+        if (!anotherReservation) {
+          await tx.property.updateMany({
+            where: {
+              id: request.propertyId,
+              available: false,
+            },
+            data: {
+              available: true,
+            },
+          });
+        }
+
+        return tx.rentalRequest.findUnique({
+          where: { id },
+          select: {
+            id: true,
+            propertyId: true,
+            tenantId: true,
+            status: true,
+            approvedAt: true,
+            createdAt: true,
+            updatedAt: true,
+            property: {
+              select: {
+                id: true,
+                title: true,
+                location: true,
+                available: true,
               },
             },
             tenant: {

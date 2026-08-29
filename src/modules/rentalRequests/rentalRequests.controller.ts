@@ -8,6 +8,7 @@ import {
   RentalRequestStatusFields,
 } from "./rentalRequests.interface";
 import { RentalRequestStatus } from "../../../generated/prisma/enums";
+import { AppError } from "../../errors/AppError";
 
 const rentalRequestsService = new RentalRequestsService();
 
@@ -111,6 +112,22 @@ export class RentalRequestsController {
       statusCode: 200,
       message: `Rental request ${status.toLowerCase()} successfully`,
       data: updatedRequest,
+    });
+  });
+
+  completeRequest = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) {
+      throw new AppError("Unauthorized", 401);
+    }
+
+    const id = typeof req.params.id === "string" ? req.params.id : "";
+    const request = await rentalRequestsService.completeRequest(id, req.user);
+
+    sendResponse(res, {
+      success: true,
+      statusCode: 200,
+      message: "Rental completed successfully",
+      data: request,
     });
   });
 }

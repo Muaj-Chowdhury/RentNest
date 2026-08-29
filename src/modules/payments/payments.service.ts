@@ -168,7 +168,6 @@ export class PaymentsService {
     return `${config.public_api_url.replace(/\/$/, "")}/api/payments/${path}`;
   }
 
-
   private generateTransactionId() {
     // A normal retry receives a new unique transaction ID. The only exception
     // is an uncertain session request, which deliberately reuses its original

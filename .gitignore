@@ -56,3 +56,17 @@ Thumbs.db
 
 # Ignore generated client/artifacts
 /generated/
+# =========================================================================
+# AI Assistant & Local Coding Tools
+# =========================================================================
+.aider*
+.aider.tags.cache.*
+.aider.chat.history.md
+.aider.input.history
+
+# =========================================================================
+# API Testing Tools
+# =========================================================================
+.postman/
+postman/
+

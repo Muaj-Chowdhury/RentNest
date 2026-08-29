@@ -5,6 +5,7 @@ import { Role } from "../../../generated/prisma/enums";
 import jwt, { JwtPayload, SignOptions } from "jsonwebtoken";
 import config from "../../config";
 import { generateToken } from "../../utils/jwt";
+import { AppError } from "../../errors/AppError";
 export class AuthService {
   async register(payload: RegisterUserPayload) {
     // Business logic for user registration
@@ -45,11 +46,14 @@ export class AuthService {
       where: { email },
     });
     if (!user) {
-      throw new Error("User not found");
+      throw new AppError("Invalid email or password", 401);
     }
     const isPasswordMatch = await bcrypt.compare(password, user.password);
     if (!isPasswordMatch) {
-      throw new Error("Invalid password");
+      throw new AppError("Invalid email or password", 401);
+    }
+    if (user.status !== "ACTIVE") {
+      throw new AppError("User account is not active", 403);
     }
     const jwtPayload = {
       id: user.id,
@@ -71,6 +75,11 @@ return { accessToken, refreshToken };
       where: { id: userId },
       omit: { password: true },
     });
+
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+
     return user;
   }
 }
