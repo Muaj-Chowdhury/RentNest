@@ -4,12 +4,13 @@ import { catchAsync } from "../../utils/catchAsync";
 import { sendResponse } from "../../utils/sendResponse";
 import { PaymentsService } from "./payments.service";
 import { ICreatePaymentPayload } from "./payments.interface";
+import { AppError } from "../../errors/AppError";
 
 const paymentsService = new PaymentsService();
 
 const getActor = (req: Request) => {
   if (!req.user) {
-    throw new Error("Unauthorized");
+    throw new AppError("Unauthorized", 401);
   }
 
   return {

@@ -39,7 +39,10 @@ export class PropertiesController {
           .filter(Boolean)
       : [];
 
-    let available: boolean | undefined;
+    // Public consumers should only see rentable listings by default. Admins
+    // can omit the filter through the dedicated admin endpoint to inspect all
+    // listings, including unavailable ones.
+    let available: boolean | undefined = req.user?.role === "ADMIN" ? undefined : true;
     if (req.query.available !== undefined) {
       const availableParam = String(req.query.available).toLowerCase();
       if (availableParam === "true") {

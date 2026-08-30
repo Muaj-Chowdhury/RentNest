@@ -45,21 +45,6 @@ export class UsersService {
     return name;
   }
 
-  private validateEmail(value: unknown) {
-    if (typeof value !== "string") {
-      throw new AppError("Email must be a string", 400);
-    }
-
-    const email = value.trim().toLowerCase();
-    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (email.length > 255 || !emailPattern.test(email)) {
-      throw new AppError("A valid email is required", 400);
-    }
-
-    return email;
-  }
-
   private validatePassword(value: unknown, field: string) {
     if (typeof value !== "string" || value.length < 8 || value.length > 128) {
       throw new AppError(
@@ -89,20 +74,16 @@ export class UsersService {
       throw new AppError("Invalid profile payload", 400);
     }
 
-    const data: { name?: string; email?: string } = {};
+    const data: { name?: string } = {};
     const payloadKeys = Object.keys(payload);
-    const allowedKeys = new Set(["name", "email"]);
+    const allowedKeys = new Set(["name"]);
 
     if (payloadKeys.some((key) => !allowedKeys.has(key))) {
-      throw new AppError("Only name and email can be updated", 400);
+      throw new AppError("Only name can be updated", 400);
     }
 
     if (payload.name !== undefined) {
       data.name = this.validateName(payload.name);
-    }
-
-    if (payload.email !== undefined) {
-      data.email = this.validateEmail(payload.email);
     }
 
     if (Object.keys(data).length === 0) {
@@ -259,17 +240,8 @@ export class UsersService {
       throw new AppError("User not found", 404);
     }
 
-    if (user.role === Role.ADMIN && status === UserStatus.BANNED) {
-      const activeAdminCount = await prisma.user.count({
-        where: {
-          role: Role.ADMIN,
-          status: UserStatus.ACTIVE,
-        },
-      });
-
-      if (activeAdminCount <= 1) {
-        throw new AppError("The last active admin cannot be banned", 409);
-      }
+    if (user.role === Role.ADMIN) {
+      throw new AppError("Administrators cannot change another administrator's status", 403);
     }
 
     return prisma.user.update({
@@ -279,10 +251,4 @@ export class UsersService {
     });
   }
 
-  async softDeleteUser(id: string, actor: UserActor) {
-    // User records are referenced by rentals and reviews, so hard deletion
-    // would destroy marketplace history. DELETE therefore deactivates the
-    // account by using the existing BANNED status.
-    return this.updateUserStatus(id, UserStatus.BANNED, actor);
-  }
 }

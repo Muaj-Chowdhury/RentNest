@@ -35,21 +35,13 @@ export const auth = (...requiredRoles: Role[]) => {
     const verifiedToken = verifyToken(token, config.jwt_access_secret);
     if (!verifiedToken.success) throw new AppError("Invalid or expired token", 401);
 
-    const { name, email, id, role } = verifiedToken.data as JwtPayload & {
+    const { id } = verifiedToken.data as JwtPayload & {
       id: string;
-      email: string;
-      name: string;
-      role: Role;
     };
 
-    if (!requiredRoles.includes(role)) {
-      throw new AppError(
-        "Forbidden. You don't have permission to access this resource.",
-        403,
-      );
-    }
     const user = await prisma.user.findUnique({
       where: { id },
+      select: { id: true, name: true, email: true, role: true, status: true },
     });
 
     if (!user) {
@@ -58,11 +50,17 @@ export const auth = (...requiredRoles: Role[]) => {
     if (user.status !== "ACTIVE") {
       throw new AppError("User is not active", 403);
     }
+    if (!requiredRoles.includes(user.role)) {
+      throw new AppError(
+        "Forbidden. You don't have permission to access this resource.",
+        403,
+      );
+    }
     req.user = {
-      email,
-      name,
-      id,
-      role,
+      email: user.email,
+      name: user.name,
+      id: user.id,
+      role: user.role,
     };
     next();
   });

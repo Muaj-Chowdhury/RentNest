@@ -1,5 +1,6 @@
 import prisma from "../../lib/prisma";
 import { ICreateCategoryPayload } from "./categories.interface";
+import { AppError } from "../../errors/AppError";
 
 export class CategoriesService {
   async getAllCategories() {
@@ -63,7 +64,12 @@ export class CategoriesService {
       where: { id },
     });
     if (!existingCategory) {
-      throw new Error("Category not found");
+      throw new AppError("Category not found", 404);
+    }
+
+    const propertyCount = await prisma.property.count({ where: { categoryId: id } });
+    if (propertyCount > 0) {
+      throw new AppError("Category cannot be deleted while properties use it", 409);
     }
 
     await prisma.category.delete({ where: { id } });

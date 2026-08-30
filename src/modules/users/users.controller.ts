@@ -48,7 +48,7 @@ export class UsersController {
     const user = this.getAuthenticatedUser(req);
     const profile = await usersService.updateMyProfile(
       user.id,
-      req.body as IUpdateProfilePayload,
+      (req.validatedBody ?? req.body) as IUpdateProfilePayload,
     );
 
     sendResponse(res, {
@@ -63,7 +63,7 @@ export class UsersController {
     const user = this.getAuthenticatedUser(req);
     const result = await usersService.changePassword(
       user.id,
-      req.body as IChangePasswordPayload,
+      (req.validatedBody ?? req.body) as IChangePasswordPayload,
     );
 
     sendResponse(res, {
@@ -104,10 +104,9 @@ export class UsersController {
   updateUserStatus = catchAsync(async (req: Request, res: Response) => {
     const actor = this.getAuthenticatedUser(req);
     const id = typeof req.params.id === "string" ? req.params.id : "";
-    const statusValue =
-      typeof req.body?.status === "string"
-        ? req.body.status.toUpperCase()
-        : "";
+    const statusValue = typeof req.validatedBody?.status === "string"
+      ? req.validatedBody.status
+      : "";
 
     if (!Object.values(UserStatus).includes(statusValue as UserStatus)) {
       throw new AppError("Status must be ACTIVE or BANNED", 400);
@@ -127,16 +126,4 @@ export class UsersController {
     });
   });
 
-  deleteUser = catchAsync(async (req: Request, res: Response) => {
-    const actor = this.getAuthenticatedUser(req);
-    const id = typeof req.params.id === "string" ? req.params.id : "";
-    const user = await usersService.softDeleteUser(id, actor);
-
-    sendResponse(res, {
-      success: true,
-      statusCode: 200,
-      message: "User deactivated successfully",
-      data: user,
-    });
-  });
 }

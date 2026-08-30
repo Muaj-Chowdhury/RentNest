@@ -105,15 +105,14 @@ export class ReviewsService {
       throw new AppError("Property not found", 404);
     }
 
-    // A review is available only to a tenant who has a verified paid rental
-    // for this property. ACTIVE is useful while the tenant is still renting;
-    // COMPLETED keeps the review available after move-out.
+    // Reviews are available only after a tenant has completed a verified paid
+    // rental for this property.
     const eligibleRental = await prisma.rentalRequest.findFirst({
       where: {
         tenantId,
         propertyId: data.propertyId,
         status: {
-          in: [RentalRequestStatus.ACTIVE, RentalRequestStatus.COMPLETED],
+        in: [RentalRequestStatus.COMPLETED],
         },
         payment: {
           is: {
@@ -126,7 +125,7 @@ export class ReviewsService {
 
     if (!eligibleRental) {
       throw new AppError(
-        "You can review a property only after a verified active or completed rental",
+        "You can review a property only after completing a verified paid rental",
         403,
       );
     }
@@ -142,8 +141,8 @@ export class ReviewsService {
         select: reviewSelect,
       });
     } catch (error) {
-      // The database unique constraint remains the final protection against
-      // two concurrent requests creating two reviews for the same rental.
+      // The database unique constraint prevents a tenant from creating
+      // multiple reviews for the same property.
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
