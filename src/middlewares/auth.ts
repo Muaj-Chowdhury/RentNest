@@ -1,4 +1,10 @@
-// auth middleware function that recieves roles and verify token roles ,find user in db and active status set user in req.user object and pass to next middleware based on global types.
+/**
+ * Authentication Middleware
+ * 
+ * Verifies JWT token, checks user roles, fetches user from database,
+ * verifies active status, and attaches user data to request object
+ * for downstream route handlers.
+ */
 
 import { NextFunction, Request, Response } from "express";
 import { JwtPayload } from "jsonwebtoken";
