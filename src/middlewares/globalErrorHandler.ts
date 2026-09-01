@@ -1,7 +1,24 @@
+/**
+ * Global Error Handler Middleware
+ * 
+ * Centralized error handling for all application errors.
+ * Handles Prisma validation errors, database errors, custom AppErrors,
+ * and unexpected runtime errors with appropriate HTTP status codes.
+ * 
+ * Should be the last middleware in the Express app.
+ */
+
 import { NextFunction, Request, Response } from "express";
 import httpStatus from "http-status";
 import { Prisma } from "../../generated/prisma/client";
 
+/**
+ * Global error handler middleware
+ * @param err - The error object
+ * @param req - Express request object
+ * @param res - Express response object
+ * @param next - Express next function
+ */
 export const globalErrorHandler = (err: any, req: Request, res: Response, next: NextFunction) => {
     console.error("error", err);
     let statusCode: number = httpStatus.INTERNAL_SERVER_ERROR;
