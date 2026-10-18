@@ -508,6 +508,9 @@ export class PaymentsService {
         }
         const latestAttempt = existingPayment?.attempts[0];
 
+        // Problem: a second create request can arrive while the first gateway
+        // validation is still running. Reusing that checkout URL could create
+        // a second charge or race the in-flight result. Fail closed first.
         if (
           existingPayment &&
           latestAttempt?.failureReason === "PAYMENT_VALIDATION_IN_PROGRESS"
@@ -517,7 +520,8 @@ export class PaymentsService {
           );
         }
 
-       //1st scenario----------------------------------------------
+        // Step 1: reuse a checkout only when Payment and its latest Attempt
+        // agree on every identifying field and both are still non-terminal.
         if (
           existingPayment &&
           (existingPayment.status === PaymentStatus.PENDING ||
@@ -561,7 +565,8 @@ export class PaymentsService {
           };
         }
        
-       //2nd scenario----------------------------------------------
+        // Step 2: if the gateway call timed out before its URL was persisted,
+        // recover the same transaction ID after a short reconciliation delay.
         const sessionCreationHasNoUrl =
           existingPayment &&
           latestAttempt &&
@@ -628,7 +633,8 @@ export class PaymentsService {
           };
         }
 
-        //3rd scenario----------------------------------------------------------
+        // Step 3: otherwise create a new immutable gateway attempt. A retry
+        // gets a new transaction ID so old callbacks remain distinguishable.
 
         // There is no reusable active session, so this is a new attempt. This
         // happens after a definitive gateway failure or customer cancellation.
@@ -742,9 +748,10 @@ export class PaymentsService {
       // than being marked as a definitive failure and replaced by a new one.
       gatewaySessionWasCreated = true;
 
-      // The external session may arrive after expiry or another terminal
-      // transition. Persist it only while this exact approved reservation and
-      // exact attempt are still open; never resurrect a cancelled checkout.
+      // Problem: the gateway response is external and can arrive after expiry
+      // or another terminal transition. Persist it only while this exact
+      // approved reservation and exact attempt are still open; never resurrect
+      // a cancelled checkout.
       await prisma.$transaction(
         async (tx) => {
           const payableRequest = await tx.rentalRequest.findFirst({
@@ -965,6 +972,16 @@ export class PaymentsService {
   }
 
   private async completePayment(transactionId: string, validationId: string) {
+    /*
+     * COMPLETION STEPS
+     * 1. Load the exact attempt identified by the gateway transaction.
+     * 2. Handle terminal attempts before the parent Payment duplicate branch.
+     * 3. Reconcile stale/cancelled charges without moving the summary pointer.
+     * 4. Claim the eligible attempt and activate the rental in one transaction.
+     *
+     * The transaction is serializable because expiry, failure callbacks, and
+     * gateway success can all try to change these same rows concurrently.
+     */
     return prisma.$transaction(async (tx) => {
       const attempt = await tx.paymentAttempt.findUnique({
         where: { transactionId },
@@ -985,6 +1002,9 @@ export class PaymentsService {
         throw new Error("Refunded payments cannot be completed");
       }
       if (attempt.status === PaymentStatus.CANCELLED) {
+        // A browser cancellation is not proof that the bank did not charge.
+        // Keep the attempt CANCELLED for audit purposes, but record the
+        // provider-confirmed charge for refund/review handling.
         const cancelledAttempt = await tx.paymentAttempt.updateMany({
           where: { id: attempt.id, status: PaymentStatus.CANCELLED },
           data: {
@@ -1021,6 +1041,8 @@ export class PaymentsService {
         return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
       }
       if (payment.status === PaymentStatus.COMPLETED) {
+        // A second validated charge must never be silently treated as the
+        // original payment. Preserve it as a separate reconciliation case.
         const duplicateAttempt = await tx.paymentAttempt.updateMany({
           where: {
             id: attempt.id,
@@ -1048,6 +1070,8 @@ export class PaymentsService {
       // A delayed success for an older attempt must not move the summary
       // pointer backward over a newer checkout attempt.
       if (payment.transactionId !== transactionId) {
+        // This is an older attempt arriving after a newer retry. Completing it
+        // must not replace Payment.transactionId with the stale transaction.
         await tx.paymentAttempt.updateMany({
           where: {
             id: attempt.id,
@@ -1082,9 +1106,15 @@ export class PaymentsService {
       });
       if (!request || (request.status !== RentalRequestStatus.APPROVED &&
         request.status !== RentalRequestStatus.ACTIVE)) {
+        // The customer may have paid after the reservation expired. Do not
+        // activate a rejected request; the validated charge remains auditable
+        // through the reconciliation path instead of being discarded.
         throw new Error("Rental request is no longer payable");
       }
       if (request.status === RentalRequestStatus.APPROVED) {
+        // Claim APPROVED -> ACTIVE conditionally. If expiry won the race,
+        // count is zero and the surrounding transaction rolls back payment
+        // completion instead of creating a paid-but-rejected rental.
         const activation = await tx.rentalRequest.updateMany({
           where: { id: payment.rentalRequestId, status: RentalRequestStatus.APPROVED },
           data: { status: RentalRequestStatus.ACTIVE },
@@ -1103,6 +1133,8 @@ export class PaymentsService {
         },
       });
       if (claimedAttempt.count !== 1) {
+        // Another callback/expiry transition won the claim. Never update the
+        // parent Payment after failing to claim its exact attempt.
         throw new Error("Payment attempt changed before completion");
       }
       await tx.payment.update({
@@ -1422,6 +1454,9 @@ export class PaymentsService {
       }
     }
 
+    // Step 1: ask SSLCommerz for the authoritative transaction result. This is
+    // required even for locally CANCELLED attempts because money may already
+    // have been collected before the browser/IPN reached us.
     const validation = await this.validateWithGateway(validationId);
 
     if (
@@ -1434,6 +1469,7 @@ export class PaymentsService {
       throw new Error("SSLCommerz validation failed");
     }
 
+    // Step 2: bind the provider response to this exact local attempt.
     if (validation.tran_id !== transactionId) {
       // A valid val_id for a different transaction must never complete this
       // attempt.
@@ -1441,6 +1477,7 @@ export class PaymentsService {
       throw new Error("Gateway transaction ID does not match");
     }
 
+    // Step 3: verify amount and currency before changing any business state.
     if (!this.amountsMatch(attempt.amount, validation.amount)) {
       // The amount is calculated from the property rent in our database. A
       // different gateway amount indicates tampering or a gateway mismatch.
@@ -1458,6 +1495,8 @@ export class PaymentsService {
       throw new Error("Gateway currency does not match payment currency");
     }
 
+    // Step 4: reject risky responses; only a fully validated payment may
+    // enter completePayment(), which performs the atomic business transition.
     if (String(validation.risk_level ?? "").trim() === "1") {
       // A risky transaction is not automatically accepted. This implementation
       // records it as failed with a manual-review reason. A later risk-review
