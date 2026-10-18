@@ -63,6 +63,10 @@ export const globalErrorHandler = (
         statusCode = httpStatus.SERVICE_UNAVAILABLE;
         errorMessage = "Database connection timed out. Please try again later.";
         break;
+      case "P2034":
+        statusCode = httpStatus.CONFLICT;
+        errorMessage = "The payment state changed concurrently. Please retry.";
+        break;
       case "P2025":
         statusCode = httpStatus.NOT_FOUND;
         errorMessage = "Record not found.";

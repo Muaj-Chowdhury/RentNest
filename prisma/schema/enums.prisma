@@ -42,8 +42,7 @@ enum PaymentStatus {
   REFUNDED
 }
 
-
 enum PaymentReconciliationStatus {
-  REFUND_REQUIRED
+  REFUND_REVIEW_REQUIRED
   RESOLVED
 }

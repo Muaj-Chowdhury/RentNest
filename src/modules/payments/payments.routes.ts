@@ -14,6 +14,7 @@ router.post(
 
 router.post(
   "/confirm",
+  auth(Role.ADMIN),
   paymentsController.confirmPayment,
 );
 

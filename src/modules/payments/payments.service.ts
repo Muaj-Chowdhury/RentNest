@@ -101,15 +101,20 @@ const paymentSelect: Prisma.PaymentSelect = {
       validationId: true,
       failureReason: true,
       paidAt: true,
-      reconciliation: {
-        select: {
-          id: true,
-          reason: true,
-          status: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      },
+      createdAt: true,
+      updatedAt: true,
+    },
+  },
+  reconciliations: {
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      attemptId: true,
+      status: true,
+      reason: true,
+      validationId: true,
+      amount: true,
+      currency: true,
       createdAt: true,
       updatedAt: true,
     },
@@ -501,6 +506,17 @@ export class PaymentsService {
             "Payment amount must be between 10.00 and 500000.00 BDT",
           );
         }
+        const latestAttempt = existingPayment?.attempts[0];
+
+        if (
+          existingPayment &&
+          latestAttempt?.failureReason === "PAYMENT_VALIDATION_IN_PROGRESS"
+        ) {
+          throw new PaymentSessionInProgressError(
+            "Payment validation is still in progress. Please wait for the gateway result.",
+          );
+        }
+
        //1st scenario----------------------------------------------
         if (
           existingPayment &&
@@ -546,17 +562,6 @@ export class PaymentsService {
         }
        
        //2nd scenario----------------------------------------------
-        const latestAttempt = existingPayment?.attempts[0];
-
-        if (
-          existingPayment &&
-          latestAttempt?.failureReason === "PAYMENT_VALIDATION_IN_PROGRESS"
-        ) {
-          throw new PaymentSessionInProgressError(
-            "Payment validation is still in progress. Please wait for the gateway result.",
-          );
-        }
-
         const sessionCreationHasNoUrl =
           existingPayment &&
           latestAttempt &&
@@ -960,150 +965,163 @@ export class PaymentsService {
   }
 
   private async completePayment(transactionId: string, validationId: string) {
-    // A gateway validation is the financial source of truth.  Local checkout
-    // cancellation or reservation expiry may prevent fulfilment, but must not
-    // erase a verified charge.
-    return prisma.$transaction(
-      async (tx) => {
-        const attempt = await tx.paymentAttempt.findUnique({
-          where: { transactionId },
-          select: {
-            id: true,
-            paymentId: true,
-            status: true,
-            gatewaySessionId: true,
-            gatewayPageUrl: true,
-            payment: {
-              select: { id: true, status: true, rentalRequestId: true },
-            },
+    return prisma.$transaction(async (tx) => {
+      const attempt = await tx.paymentAttempt.findUnique({
+        where: { transactionId },
+        select: {
+          id: true, paymentId: true, status: true, amount: true, currency: true,
+          gatewaySessionId: true, gatewayPageUrl: true,
+          payment: {
+            select: { id: true, status: true, rentalRequestId: true, transactionId: true },
+          },
+        },
+      });
+      if (!attempt) throw new Error("Payment attempt not found");
+      const payment = attempt.payment;
+      if (attempt.status === PaymentStatus.COMPLETED) {
+        return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
+      }
+      if (attempt.status === PaymentStatus.REFUNDED || payment.status === PaymentStatus.REFUNDED) {
+        throw new Error("Refunded payments cannot be completed");
+      }
+      if (attempt.status === PaymentStatus.CANCELLED) {
+        const cancelledAttempt = await tx.paymentAttempt.updateMany({
+          where: { id: attempt.id, status: PaymentStatus.CANCELLED },
+          data: {
+            validationId, paidAt: new Date(),
+            failureReason: "VERIFIED_AFTER_CANCELLATION_REQUIRES_REFUND_REVIEW",
           },
         });
-
-        if (!attempt) throw new Error("Payment attempt not found");
-        const payment = attempt.payment;
-
-        if (attempt.status === PaymentStatus.COMPLETED) {
-          return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
+        if (cancelledAttempt.count !== 1) {
+          throw new Error("Payment attempt changed before reconciliation");
         }
-        if (attempt.status === PaymentStatus.REFUNDED || payment.status === PaymentStatus.REFUNDED) {
-          throw new Error("Refunded payments cannot be completed");
-        }
-
-        const request = await tx.rentalRequest.findUnique({
-          where: { id: payment.rentalRequestId },
-          select: { status: true },
+        await tx.paymentReconciliation.upsert({
+          where: { attemptId: attempt.id },
+          create: {
+            paymentId: payment.id, attemptId: attempt.id,
+            reason: "VERIFIED_AFTER_CANCELLATION_REQUIRES_REFUND_REVIEW",
+            validationId, amount: attempt.amount, currency: attempt.currency,
+          },
+          update: { validationId },
         });
-        if (!request) throw new Error("Rental request is no longer payable");
-
-        // The financial event is verified at this point.  A completed summary
-        // means this is a second charge and must be retained for refund work.
-        if (payment.status === PaymentStatus.COMPLETED) {
-          await tx.paymentAttempt.update({
-            where: { id: attempt.id },
-            data: {
-              status: PaymentStatus.COMPLETED,
-              validationId,
-              paidAt: new Date(),
-              failureReason: "DUPLICATE_SUCCESS_REQUIRES_REFUND_REVIEW",
-            },
-          });
-          await tx.paymentReconciliation.upsert({
-            where: { paymentAttemptId: attempt.id },
-            create: {
-              paymentAttemptId: attempt.id,
-              reason: "DUPLICATE_SUCCESS_REQUIRES_REFUND_REVIEW",
-            },
-            update: { reason: "DUPLICATE_SUCCESS_REQUIRES_REFUND_REVIEW" },
-          });
-          return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
-        }
-
-        const rentalIsPayable =
-          request.status === RentalRequestStatus.APPROVED ||
-          request.status === RentalRequestStatus.ACTIVE;
-
-        if (!rentalIsPayable) {
-          // Do not activate a rejected/expired rental, but do persist the
-          // verified charge and create durable refund/reconciliation work.
-          await tx.paymentAttempt.update({
-            where: { id: attempt.id },
-            data: {
-              status: PaymentStatus.COMPLETED,
-              validationId,
-              paidAt: new Date(),
-              failureReason: "LATE_SUCCESS_AFTER_RENTAL_CLOSED_REQUIRES_REFUND",
-            },
-          });
-          await tx.payment.update({
-            where: { id: payment.id },
-            data: {
+        if (payment.transactionId === transactionId) {
+          await tx.payment.updateMany({
+            where: {
+              id: payment.id,
               transactionId,
+              status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING, PaymentStatus.CANCELLED] },
+            },
+            data: {
               status: PaymentStatus.COMPLETED,
               validationId,
-              gatewaySessionId: attempt.gatewaySessionId,
-              gatewayPageUrl: attempt.gatewayPageUrl,
               paidAt: new Date(),
             },
           });
-          await tx.paymentReconciliation.upsert({
-            where: { paymentAttemptId: attempt.id },
-            create: {
-              paymentAttemptId: attempt.id,
-              reason: "LATE_SUCCESS_AFTER_RENTAL_CLOSED_REQUIRES_REFUND",
-            },
-            update: { reason: "LATE_SUCCESS_AFTER_RENTAL_CLOSED_REQUIRES_REFUND" },
-          });
-          return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
         }
-
-        // Claim fulfilment before changing financial rows. Checking the count
-        // makes expiry-vs-completion races roll back rather than leave a paid,
-        // rejected rental.
-        if (request.status === RentalRequestStatus.APPROVED) {
-          const activation = await tx.rentalRequest.updateMany({
-            where: { id: payment.rentalRequestId, status: RentalRequestStatus.APPROVED },
-            data: { status: RentalRequestStatus.ACTIVE },
-          });
-          if (activation.count !== 1) {
-            throw new Error("Rental request is no longer payable");
-          }
-        }
-
-        await tx.paymentAttempt.update({
-          where: { id: attempt.id },
-          data: {
-            status: PaymentStatus.COMPLETED,
-            validationId,
-            paidAt: new Date(),
-            failureReason: null,
-          },
-        });
-        await tx.payment.update({
-          where: { id: payment.id },
-          data: {
-            transactionId,
-            status: PaymentStatus.COMPLETED,
-            validationId,
-            gatewaySessionId: attempt.gatewaySessionId,
-            gatewayPageUrl: attempt.gatewayPageUrl,
-            paidAt: new Date(),
-          },
-        });
-        await tx.paymentAttempt.updateMany({
+        return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
+      }
+      if (payment.status === PaymentStatus.COMPLETED) {
+        const duplicateAttempt = await tx.paymentAttempt.updateMany({
           where: {
-            paymentId: payment.id,
-            id: { not: attempt.id },
-            status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
+            id: attempt.id,
+            status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING, PaymentStatus.FAILED] },
           },
           data: {
-            status: PaymentStatus.CANCELLED,
-            failureReason: "ANOTHER_ATTEMPT_COMPLETED",
+            status: PaymentStatus.COMPLETED, validationId, paidAt: new Date(),
+            failureReason: "DUPLICATE_SUCCESS_REQUIRES_REFUND_REVIEW",
           },
+        });
+        if (duplicateAttempt.count !== 1) {
+          throw new Error("Payment attempt changed before duplicate reconciliation");
+        }
+        await tx.paymentReconciliation.upsert({
+          where: { attemptId: attempt.id },
+          create: {
+            paymentId: payment.id, attemptId: attempt.id,
+            reason: "DUPLICATE_SUCCESS_REQUIRES_REFUND_REVIEW",
+            validationId, amount: attempt.amount, currency: attempt.currency,
+          },
+          update: { validationId },
         });
         return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+      }
+      // A delayed success for an older attempt must not move the summary
+      // pointer backward over a newer checkout attempt.
+      if (payment.transactionId !== transactionId) {
+        await tx.paymentAttempt.updateMany({
+          where: {
+            id: attempt.id,
+            transactionId,
+            status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING, PaymentStatus.FAILED] },
+          },
+          data: {
+            status: PaymentStatus.COMPLETED,
+            validationId,
+            paidAt: new Date(),
+            failureReason: "STALE_SUCCESS_REQUIRES_REFUND_REVIEW",
+          },
+        });
+        await tx.paymentReconciliation.upsert({
+          where: { attemptId: attempt.id },
+          create: {
+            paymentId: payment.id,
+            attemptId: attempt.id,
+            reason: "STALE_SUCCESS_REQUIRES_REFUND_REVIEW",
+            validationId,
+            amount: attempt.amount,
+            currency: attempt.currency,
+          },
+          update: { validationId, reason: "STALE_SUCCESS_REQUIRES_REFUND_REVIEW" },
+        });
+        return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
+      }
+
+      const request = await tx.rentalRequest.findUnique({
+        where: { id: payment.rentalRequestId },
+        select: { status: true },
+      });
+      if (!request || (request.status !== RentalRequestStatus.APPROVED &&
+        request.status !== RentalRequestStatus.ACTIVE)) {
+        throw new Error("Rental request is no longer payable");
+      }
+      if (request.status === RentalRequestStatus.APPROVED) {
+        const activation = await tx.rentalRequest.updateMany({
+          where: { id: payment.rentalRequestId, status: RentalRequestStatus.APPROVED },
+          data: { status: RentalRequestStatus.ACTIVE },
+        });
+        if (activation.count !== 1) throw new Error("Rental request is no longer payable");
+      }
+      const claimedAttempt = await tx.paymentAttempt.updateMany({
+        where: {
+          id: attempt.id,
+          transactionId,
+          status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING, PaymentStatus.FAILED] },
+        },
+        data: {
+          status: PaymentStatus.COMPLETED, validationId, paidAt: new Date(),
+          failureReason: null,
+        },
+      });
+      if (claimedAttempt.count !== 1) {
+        throw new Error("Payment attempt changed before completion");
+      }
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          transactionId, status: PaymentStatus.COMPLETED, validationId,
+          gatewaySessionId: attempt.gatewaySessionId,
+          gatewayPageUrl: attempt.gatewayPageUrl, paidAt: new Date(),
+        },
+      });
+      await tx.paymentAttempt.updateMany({
+        where: {
+          paymentId: payment.id, id: { not: attempt.id },
+          status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
+        },
+        data: { status: PaymentStatus.CANCELLED, failureReason: "ANOTHER_ATTEMPT_COMPLETED" },
+      });
+      return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   private async markAttemptFailed(transactionId: string, reason: string) {
@@ -1390,16 +1408,13 @@ export class PaymentsService {
       return this.completePayment(transactionId, validationId);
     }
 
-    // A local cancellation may race a successful bank charge. A signed VALID
-    // IPN is still validated with SSLCommerz below; completion will either
-    // activate a payable rental or create a durable refund reconciliation.
-    const cancelledBeforeValidation = attempt.status === PaymentStatus.CANCELLED;
-
     if (attempt.status === PaymentStatus.REFUNDED) {
       throw new Error("Refunded payment attempts cannot be confirmed");
     }
 
-    if (!cancelledBeforeValidation) {
+    // CANCELLED attempts are still gateway-validated; completion preserves
+    // cancellation and records refund-review work for a verified charge.
+    if (attempt.status !== PaymentStatus.CANCELLED) {
       const processingAttempt = await this.markAttemptProcessing(transactionId);
       if (!processingAttempt) throw new Error("Payment attempt not found");
       if (processingAttempt.status === PaymentStatus.REFUNDED) {
@@ -1433,15 +1448,17 @@ export class PaymentsService {
       throw new Error("Gateway amount does not match payment amount");
     }
 
-    const validationCurrency = validation.currency ?? validation.currency_type;
+    const validationCurrency = (validation.currency ?? validation.currency_type)
+      ?.trim()
+      .toUpperCase();
 
-    if (validationCurrency !== attempt.currency) {
+    if (validationCurrency !== attempt.currency.trim().toUpperCase()) {
       // Currency mismatch is also a hard rejection; no rental activation occurs.
       await this.markAttemptFailed(transactionId, "CURRENCY_MISMATCH");
       throw new Error("Gateway currency does not match payment currency");
     }
 
-    if (validation.risk_level === "1") {
+    if (String(validation.risk_level ?? "").trim() === "1") {
       // A risky transaction is not automatically accepted. This implementation
       // records it as failed with a manual-review reason. A later risk-review
       // module could introduce a dedicated REVIEW status.

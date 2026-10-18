@@ -3,8 +3,6 @@ model Payment {
 
   rentalRequestId String        @unique
   rentalRequest   RentalRequest @relation(fields: [rentalRequestId], references: [id], onDelete: Cascade)
-  attempts PaymentAttempt[]
-
   transactionId String          @unique
   provider      PaymentProvider
   gatewaySessionId String?
@@ -16,6 +14,8 @@ model Payment {
   currency String  @default("BDT") @db.VarChar(3)
   status PaymentStatus @default(PENDING)
 
+  attempts PaymentAttempt[]
+  reconciliations PaymentReconciliation[]
 
   paidAt DateTime?
   createdAt DateTime @default(now())
@@ -41,8 +41,7 @@ model PaymentAttempt {
   validationId     String?
   failureReason    String?
   paidAt           DateTime?
-
-  reconciliation PaymentReconciliation?
+  reconciliations  PaymentReconciliation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -52,16 +51,26 @@ model PaymentAttempt {
   @@map("payment_attempts")
 }
 
-
 model PaymentReconciliation {
-  id               String                     @id @default(uuid())
-  paymentAttemptId String                     @unique
-  paymentAttempt   PaymentAttempt             @relation(fields: [paymentAttemptId], references: [id], onDelete: Cascade)
-  reason           String
-  status           PaymentReconciliationStatus @default(REFUND_REQUIRED)
-  createdAt        DateTime                   @default(now())
-  updatedAt        DateTime                   @updatedAt
+  id String @id @default(uuid())
 
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  attemptId String
+  attempt   PaymentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  status       PaymentReconciliationStatus @default(REFUND_REVIEW_REQUIRED)
+  reason       String
+  validationId String
+  amount       Decimal @db.Decimal(10, 2)
+  currency     String  @db.VarChar(3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([attemptId])
+  @@index([paymentId])
   @@index([status])
   @@map("payment_reconciliations")
 }

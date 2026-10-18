@@ -38,7 +38,7 @@ app.use("/api/properties", propertyRoutes);
 app.use("/api/rental-requests", rentalRequestRoutes);
 app.use("/api/payments", paymentRoutes);
 
-// global error handler (should be last middleware)
-app.use(globalErrorHandler);
 app.use(notFound);
+// Error handling must run after both route handlers and the 404 middleware.
+app.use(globalErrorHandler);
 export default app;
