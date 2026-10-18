@@ -9,7 +9,7 @@ async function main() {
     try{
     await prisma.$connect();
     console.log("Connected to the database");
-    // startPaymentReservationExpiryJob();
+    startPaymentReservationExpiryJob();
     app.listen(PORT, () => {
         console.log(`Server is running on port ${PORT}`);
     });

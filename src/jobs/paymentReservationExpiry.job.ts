@@ -1,9 +1,7 @@
 import config from "../config";
 import { PaymentsService } from "../modules/payments/payments.service";
 
-/**
- * Payment Reservation Expiry Job
- *
+/*
  * Payment reservation expiry is deliberately implemented as a small internal
  * worker instead of an HTTP endpoint.
  *
@@ -33,16 +31,17 @@ export const startPaymentReservationExpiryJob = () => {
 
       if (result.expiredCount > 0) {
         console.log(
-          `[${new Date().toISOString()}] [payment-expiry] Expired ${result.expiredCount} reservation(s)`,
+          `[payment-expiry] Expired ${result.expiredCount} reservation(s)`,
         );
+        console.log(
+          new Date().toISOString(),
+          `[payment-expiry] Next check in ${intervalMs} ms`,
+        )
       }
-      console.log(
-        `[${new Date().toISOString()}] [payment-expiry] Next check in ${intervalMs} ms`,
-      );
     } catch (error) {
       // A failed cleanup pass must not crash the API process. The next
       // interval will retry, and the error remains visible in server logs.
-      console.error(`[${new Date().toISOString()}] [payment-expiry] Cleanup failed`, error);
+      console.error("[payment-expiry] Cleanup failed", error);
     }
   };
 

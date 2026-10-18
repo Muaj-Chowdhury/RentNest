@@ -4,8 +4,11 @@
   "description": "",
   "main": "server.ts",
   "scripts": {
+    "predev": "prisma generate",
     "dev": "tsx watch src/server.ts",
+    "prebuild": "prisma generate",
     "build": "tsc",
+    "prestart": "prisma generate",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "postinstall": "prisma generate",

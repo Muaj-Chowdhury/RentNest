@@ -402,8 +402,8 @@ export class RentalRequestsService {
 
         // Keep a property unavailable while another approved or active
         // reservation still owns it. This makes completion safe if future
-        // business rules allow overlapping requests.
         const anotherReservation = await tx.rentalRequest.findFirst({
+        // business rules allow overlapping requests.
           where: {
             propertyId: request.propertyId,
             id: { not: id },

@@ -1,6 +1,6 @@
 /**
  * Authentication Middleware
- * 
+ *
  * Verifies JWT token, checks user roles, fetches user from database,
  * verifies active status, and attaches user data to request object
  * for downstream route handlers.
@@ -39,7 +39,8 @@ export const auth = (...requiredRoles: Role[]) => {
       throw new AppError("Unauthorized", 401);
     }
     const verifiedToken = verifyToken(token, config.jwt_access_secret);
-    if (!verifiedToken.success) throw new AppError("Invalid or expired token", 401);
+    if (!verifiedToken.success)
+      throw new AppError("Invalid or expired token", 401);
 
     const { id } = verifiedToken.data as JwtPayload & {
       id: string;

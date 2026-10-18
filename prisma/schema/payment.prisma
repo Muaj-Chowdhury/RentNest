@@ -3,23 +3,21 @@ model Payment {
 
   rentalRequestId String        @unique
   rentalRequest   RentalRequest @relation(fields: [rentalRequestId], references: [id], onDelete: Cascade)
+  attempts PaymentAttempt[]
 
   transactionId String          @unique
   provider      PaymentProvider
-
-  amount   Decimal @db.Decimal(10, 2)
-  currency String  @default("BDT") @db.VarChar(3)
-
-  status PaymentStatus @default(PENDING)
-
-  attempts PaymentAttempt[]
-
   gatewaySessionId String?
   gatewayPageUrl   String?
   validationId     String?
 
-  paidAt DateTime?
 
+  amount   Decimal @db.Decimal(10, 2)
+  currency String  @default("BDT") @db.VarChar(3)
+  status PaymentStatus @default(PENDING)
+
+
+  paidAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -44,10 +42,26 @@ model PaymentAttempt {
   failureReason    String?
   paidAt           DateTime?
 
+  reconciliation PaymentReconciliation?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([paymentId])
   @@index([status])
   @@map("payment_attempts")
+}
+
+
+model PaymentReconciliation {
+  id               String                     @id @default(uuid())
+  paymentAttemptId String                     @unique
+  paymentAttempt   PaymentAttempt             @relation(fields: [paymentAttemptId], references: [id], onDelete: Cascade)
+  reason           String
+  status           PaymentReconciliationStatus @default(REFUND_REQUIRED)
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  @@index([status])
+  @@map("payment_reconciliations")
 }
