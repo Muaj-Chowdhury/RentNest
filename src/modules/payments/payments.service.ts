@@ -7,6 +7,7 @@ import {
   Role,
 } from "../../../generated/prisma/enums";
 import config from "../../config";
+import { AppError } from "../../errors/AppError";
 import prisma from "../../lib/prisma";
 import { GatewayPayload, ICreatePaymentPayload } from "./payments.interface";
 
@@ -147,7 +148,7 @@ export class PaymentsService {
   private getRequestTimeoutMs() {
     const timeoutMs = config.sslcommerz_request_timeout_ms;
 
-    return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 15_000 // 15 seconds;
+    return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 15_000; // 15 seconds;
   }
 
   private getUncertainRetryAfterMs() {
@@ -157,7 +158,6 @@ export class PaymentsService {
       ? retryAfterMs
       : Math.max(this.getRequestTimeoutMs() * 2, 30_000); // 30 seconds
   }
-
 
   private getSessionUrl() {
     // This endpoint creates an SSLCommerz checkout session. The sandbox URL
@@ -358,7 +358,9 @@ export class PaymentsService {
     // A successful HTTP response alone is not enough. SSLCommerz must return
     // both SUCCESS and a usable GatewayPageURL/sessionkey.
     if (!response.ok || result.status !== "SUCCESS") {
-      throw new Error(result.failedreason || "SSLCommerz session creation failed");
+      throw new Error(
+        result.failedreason || "SSLCommerz session creation failed",
+      );
     }
 
     if (!result.sessionkey || !result.GatewayPageURL) {
@@ -415,11 +417,11 @@ export class PaymentsService {
      * processing and confirmPayment().
      */
     if (!payload?.rentalRequestId) {
-      throw new Error("rentalRequestId is required");
+      throw new AppError("rentalRequestId is required", 400);
     }
 
     if (!payload.phone) {
-      throw new Error("Tenant phone number is required");
+      throw new AppError("Tenant phone number is required", 400);
     }
 
     const preparedPayment = await prisma.$transaction(
@@ -476,12 +478,15 @@ export class PaymentsService {
         });
 
         if (!request) {
-          throw new Error("Rental request not found");
+          throw new AppError("Rental request not found", 404);
         }
 
         if (request.tenantId !== tenantId) {
           // tenantId comes from authentication, never from the request body.
-          throw new Error("You cannot pay for another tenant's request");
+          throw new AppError(
+            "You cannot pay for another tenant's request",
+            403,
+          );
         }
 
         const existingPayment = request.payment;
@@ -489,21 +494,22 @@ export class PaymentsService {
         if (existingPayment?.status === PaymentStatus.COMPLETED) {
           // The rental has already been paid. A new checkout session would risk
           // charging the tenant twice.
-          throw new Error("This rental request has already been paid");
+          throw new AppError("This rental request has already been paid", 409);
         }
 
         if (request.status !== RentalRequestStatus.APPROVED) {
           // Payment is allowed only after the landlord/admin approves the
           // rental request. A FAILED/CANCELLED gateway attempt does not change
           // this request status, so the tenant can retry.
-          throw new Error("Only approved rental requests can be paid");
+          throw new AppError("Only approved rental requests can be paid", 409);
         }
         // The customer cannot choose or modify the payment amount.
         const amount = request.property.rent.toFixed(2);
 
         if (Number(amount) < 10 || Number(amount) > 500000) {
-          throw new Error(
+          throw new AppError(
             "Payment amount must be between 10.00 and 500000.00 BDT",
+            400,
           );
         }
         const latestAttempt = existingPayment?.attempts[0];
@@ -521,7 +527,7 @@ export class PaymentsService {
         }
 
         // Step 1: reuse a checkout only when Payment and its latest Attempt
-        // agree on every identifying field and both are still non-terminal.
+        // agree on every identifying field and both are still non-terminal/final like in pending or processing state.
         if (
           existingPayment &&
           (existingPayment.status === PaymentStatus.PENDING ||
@@ -537,10 +543,9 @@ export class PaymentsService {
             existingPayment.gatewayPageUrl &&
           existingPayment.attempts[0].transactionId ===
             existingPayment.transactionId
-        )
-        //__PROCESSING__: The attempt was just created but the gateway call hasn't returned yet, *or* validation is actively running. In either case, the existing checkout URL is still valid.
+        ) //__PROCESSING__: The attempt was just created but the gateway call hasn't returned yet, *or* validation is actively running. In either case, the existing checkout URL is still valid.
 
-         {
+        {
           // The tenant called create-payment again while the previous session
           // is still pending. Return the same URL instead of creating another
           // gateway transaction. This is the meaning of existingSession=true.
@@ -564,7 +569,7 @@ export class PaymentsService {
             sessionRetry: false,
           };
         }
-       
+
         // Step 2: if the gateway call timed out before its URL was persisted,
         // recover the same transaction ID after a short reconciliation delay.
         const sessionCreationHasNoUrl =
@@ -815,7 +820,8 @@ export class PaymentsService {
       };
     } catch (error) {
       const requestIsUncertain =
-        gatewaySessionWasCreated || error instanceof GatewayRequestUncertainError;
+        gatewaySessionWasCreated ||
+        error instanceof GatewayRequestUncertainError;
 
       if (requestIsUncertain) {
         // We did not receive a trustworthy gateway response. Keep this exact
@@ -930,7 +936,7 @@ export class PaymentsService {
     // The same visibility rule is applied to one payment lookup. A user must
     // not be able to guess another user's payment ID and read its details.
     if (!id) {
-      throw new Error("Payment ID is required");
+      throw new AppError("Payment ID is required", 400);
     }
 
     const visibilityFilter: Prisma.PaymentWhereInput =
@@ -965,7 +971,7 @@ export class PaymentsService {
     });
 
     if (!payment) {
-      throw new Error("Payment not found");
+      throw new AppError("Payment not found", 404);
     }
 
     return payment;
@@ -982,178 +988,335 @@ export class PaymentsService {
      * The transaction is serializable because expiry, failure callbacks, and
      * gateway success can all try to change these same rows concurrently.
      */
-    return prisma.$transaction(async (tx) => {
-      const attempt = await tx.paymentAttempt.findUnique({
-        where: { transactionId },
-        select: {
-          id: true, paymentId: true, status: true, amount: true, currency: true,
-          gatewaySessionId: true, gatewayPageUrl: true,
-          payment: {
-            select: { id: true, status: true, rentalRequestId: true, transactionId: true },
-          },
-        },
-      });
-      if (!attempt) throw new Error("Payment attempt not found");
-      const payment = attempt.payment;
-      if (attempt.status === PaymentStatus.COMPLETED) {
-        return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
-      }
-      if (attempt.status === PaymentStatus.REFUNDED || payment.status === PaymentStatus.REFUNDED) {
-        throw new Error("Refunded payments cannot be completed");
-      }
-      if (attempt.status === PaymentStatus.CANCELLED) {
-        // A browser cancellation is not proof that the bank did not charge.
-        // Keep the attempt CANCELLED for audit purposes, but record the
-        // provider-confirmed charge for refund/review handling.
-        const cancelledAttempt = await tx.paymentAttempt.updateMany({
-          where: { id: attempt.id, status: PaymentStatus.CANCELLED },
-          data: {
-            validationId, paidAt: new Date(),
-            failureReason: "VERIFIED_AFTER_CANCELLATION_REQUIRES_REFUND_REVIEW",
+    return prisma.$transaction(
+      async (tx) => {
+        const attempt = await tx.paymentAttempt.findUnique({
+          where: { transactionId },
+          select: {
+            id: true,
+            paymentId: true,
+            status: true,
+            amount: true,
+            currency: true,
+            gatewaySessionId: true,
+            gatewayPageUrl: true,
+            payment: {
+              select: {
+                id: true,
+                status: true,
+                rentalRequestId: true,
+                transactionId: true,
+              },
+            },
           },
         });
-        if (cancelledAttempt.count !== 1) {
-          throw new Error("Payment attempt changed before reconciliation");
+        if (!attempt) throw new AppError("Payment attempt not found", 404);
+        const payment = attempt.payment;
+        if (attempt.status === PaymentStatus.COMPLETED) {
+          return tx.payment.findUnique({
+            where: { id: payment.id },
+            select: paymentSelect,
+          });
         }
-        await tx.paymentReconciliation.upsert({
-          where: { attemptId: attempt.id },
-          create: {
-            paymentId: payment.id, attemptId: attempt.id,
-            reason: "VERIFIED_AFTER_CANCELLATION_REQUIRES_REFUND_REVIEW",
-            validationId, amount: attempt.amount, currency: attempt.currency,
-          },
-          update: { validationId },
-        });
-        if (payment.transactionId === transactionId) {
-          await tx.payment.updateMany({
+        if (
+          attempt.status === PaymentStatus.REFUNDED ||
+          payment.status === PaymentStatus.REFUNDED
+        ) {
+          throw new AppError("Refunded payments cannot be completed", 409);
+        }
+        if (attempt.status === PaymentStatus.CANCELLED) {
+          // A browser cancellation is not proof that the bank did not charge.
+          // Keep the attempt CANCELLED for audit purposes, but record the
+          // provider-confirmed charge for refund/review handling.
+          const cancelledAttempt = await tx.paymentAttempt.updateMany({
+            where: { id: attempt.id, status: PaymentStatus.CANCELLED },
+            data: {
+              validationId,
+              paidAt: new Date(),
+              failureReason:
+                "VERIFIED_AFTER_CANCELLATION_REQUIRES_REFUND_REVIEW",
+            },
+          });
+          if (cancelledAttempt.count !== 1) {
+            throw new AppError(
+              "Payment attempt changed before reconciliation",
+              409,
+            );
+          }
+          await tx.paymentReconciliation.upsert({
+            where: { attemptId: attempt.id },
+            create: {
+              paymentId: payment.id,
+              attemptId: attempt.id,
+              reason: "VERIFIED_AFTER_CANCELLATION_REQUIRES_REFUND_REVIEW",
+              validationId,
+              amount: attempt.amount,
+              currency: attempt.currency,
+            },
+            update: { validationId },
+          });
+          if (payment.transactionId === transactionId) {
+            await tx.payment.updateMany({
+              where: {
+                id: payment.id,
+                transactionId,
+                status: {
+                  in: [
+                    PaymentStatus.PENDING,
+                    PaymentStatus.PROCESSING,
+                    PaymentStatus.CANCELLED,
+                  ],
+                },
+              },
+              data: {
+                status: PaymentStatus.COMPLETED,
+                validationId,
+                paidAt: new Date(),
+              },
+            });
+          }
+          return tx.payment.findUnique({
+            where: { id: payment.id },
+            select: paymentSelect,
+          });
+        }
+        if (payment.status === PaymentStatus.COMPLETED) {
+          // A second validated charge must never be silently treated as the
+          // original payment. Preserve it as a separate reconciliation case.
+          const duplicateAttempt = await tx.paymentAttempt.updateMany({
             where: {
-              id: payment.id,
-              transactionId,
-              status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING, PaymentStatus.CANCELLED] },
+              id: attempt.id,
+              status: {
+                in: [
+                  PaymentStatus.PENDING,
+                  PaymentStatus.PROCESSING,
+                  PaymentStatus.FAILED,
+                ],
+              },
             },
             data: {
               status: PaymentStatus.COMPLETED,
               validationId,
               paidAt: new Date(),
+              failureReason: "DUPLICATE_SUCCESS_REQUIRES_REFUND_REVIEW",
             },
           });
+          if (duplicateAttempt.count !== 1) {
+            throw new AppError(
+              "Payment attempt changed before duplicate reconciliation",
+              409,
+            );
+          }
+          await tx.paymentReconciliation.upsert({
+            where: { attemptId: attempt.id },
+            create: {
+              paymentId: payment.id,
+              attemptId: attempt.id,
+              reason: "DUPLICATE_SUCCESS_REQUIRES_REFUND_REVIEW",
+              validationId,
+              amount: attempt.amount,
+              currency: attempt.currency,
+            },
+            update: { validationId },
+          });
+          return tx.payment.findUnique({
+            where: { id: payment.id },
+            select: paymentSelect,
+          });
         }
-        return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
-      }
-      if (payment.status === PaymentStatus.COMPLETED) {
-        // A second validated charge must never be silently treated as the
-        // original payment. Preserve it as a separate reconciliation case.
-        const duplicateAttempt = await tx.paymentAttempt.updateMany({
-          where: {
-            id: attempt.id,
-            status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING, PaymentStatus.FAILED] },
-          },
-          data: {
-            status: PaymentStatus.COMPLETED, validationId, paidAt: new Date(),
-            failureReason: "DUPLICATE_SUCCESS_REQUIRES_REFUND_REVIEW",
-          },
-        });
-        if (duplicateAttempt.count !== 1) {
-          throw new Error("Payment attempt changed before duplicate reconciliation");
+        // A delayed success for an older attempt must not move the summary
+        // pointer backward over a newer checkout attempt.
+        if (payment.transactionId !== transactionId) {
+          // This is an older attempt arriving after a newer retry. Completing it
+          // must not replace Payment.transactionId with the stale transaction.
+          await tx.paymentAttempt.updateMany({
+            where: {
+              id: attempt.id,
+              transactionId,
+              status: {
+                in: [
+                  PaymentStatus.PENDING,
+                  PaymentStatus.PROCESSING,
+                  PaymentStatus.FAILED,
+                ],
+              },
+            },
+            data: {
+              status: PaymentStatus.COMPLETED,
+              validationId,
+              paidAt: new Date(),
+              failureReason: "STALE_SUCCESS_REQUIRES_REFUND_REVIEW",
+            },
+          });
+          await tx.paymentReconciliation.upsert({
+            where: { attemptId: attempt.id },
+            create: {
+              paymentId: payment.id,
+              attemptId: attempt.id,
+              reason: "STALE_SUCCESS_REQUIRES_REFUND_REVIEW",
+              validationId,
+              amount: attempt.amount,
+              currency: attempt.currency,
+            },
+            update: {
+              validationId,
+              reason: "STALE_SUCCESS_REQUIRES_REFUND_REVIEW",
+            },
+          });
+          return tx.payment.findUnique({
+            where: { id: payment.id },
+            select: paymentSelect,
+          });
         }
-        await tx.paymentReconciliation.upsert({
-          where: { attemptId: attempt.id },
-          create: {
-            paymentId: payment.id, attemptId: attempt.id,
-            reason: "DUPLICATE_SUCCESS_REQUIRES_REFUND_REVIEW",
-            validationId, amount: attempt.amount, currency: attempt.currency,
-          },
-          update: { validationId },
+
+        const request = await tx.rentalRequest.findUnique({
+          where: { id: payment.rentalRequestId },
+          select: { status: true },
         });
-        return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
-      }
-      // A delayed success for an older attempt must not move the summary
-      // pointer backward over a newer checkout attempt.
-      if (payment.transactionId !== transactionId) {
-        // This is an older attempt arriving after a newer retry. Completing it
-        // must not replace Payment.transactionId with the stale transaction.
-        await tx.paymentAttempt.updateMany({
+
+        const rentalIsPayable =
+          request?.status === RentalRequestStatus.APPROVED ||
+          request?.status === RentalRequestStatus.ACTIVE;
+
+        // Claim APPROVED -> ACTIVE conditionally when the request is still
+        // approved. If expiry or another transition won the race, count is zero
+        // and we fall through to the refund-review path below instead of
+        // activating, without discarding the verified charge.
+        let rentalActivated = false;
+        if (request?.status === RentalRequestStatus.APPROVED) {
+          const activation = await tx.rentalRequest.updateMany({
+            where: {
+              id: payment.rentalRequestId,
+              status: RentalRequestStatus.APPROVED,
+            },
+            data: { status: RentalRequestStatus.ACTIVE },
+          });
+          rentalActivated = activation.count === 1;
+        }
+
+        const rentalFulfillable =
+          rentalIsPayable &&
+          (request?.status !== RentalRequestStatus.APPROVED || rentalActivated);
+
+        if (!rentalFulfillable) {
+          // The customer was charged, but the rental can no longer be activated
+          // (expired, rejected, or claimed by a concurrent transition). Record
+          // the verified charge as refund-review work instead of losing it, and
+          // never activate a non-payable rental.
+          await tx.paymentAttempt.updateMany({
+            where: {
+              id: attempt.id,
+              transactionId,
+              status: {
+                in: [
+                  PaymentStatus.PENDING,
+                  PaymentStatus.PROCESSING,
+                  PaymentStatus.FAILED,
+                ],
+              },
+            },
+            data: {
+              status: PaymentStatus.COMPLETED,
+              validationId,
+              paidAt: new Date(),
+              failureReason: "LATE_SUCCESS_AFTER_RENTAL_CLOSED_REQUIRES_REFUND",
+            },
+          });
+          if (payment.transactionId === transactionId) {
+            await tx.payment.updateMany({
+              where: {
+                id: payment.id,
+                transactionId,
+                status: {
+                  in: [
+                    PaymentStatus.PENDING,
+                    PaymentStatus.PROCESSING,
+                    PaymentStatus.FAILED,
+                  ],
+                },
+              },
+              data: {
+                status: PaymentStatus.COMPLETED,
+                validationId,
+                gatewaySessionId: attempt.gatewaySessionId,
+                gatewayPageUrl: attempt.gatewayPageUrl,
+                paidAt: new Date(),
+              },
+            });
+          }
+          await tx.paymentReconciliation.upsert({
+            where: { attemptId: attempt.id },
+            create: {
+              paymentId: payment.id,
+              attemptId: attempt.id,
+              reason: "LATE_SUCCESS_AFTER_RENTAL_CLOSED_REQUIRES_REFUND",
+              validationId,
+              amount: attempt.amount,
+              currency: attempt.currency,
+            },
+            update: {
+              validationId,
+              reason: "LATE_SUCCESS_AFTER_RENTAL_CLOSED_REQUIRES_REFUND",
+            },
+          });
+          return tx.payment.findUnique({
+            where: { id: payment.id },
+            select: paymentSelect,
+          });
+        }
+        const claimedAttempt = await tx.paymentAttempt.updateMany({
           where: {
             id: attempt.id,
             transactionId,
-            status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING, PaymentStatus.FAILED] },
+            status: {
+              in: [
+                PaymentStatus.PENDING,
+                PaymentStatus.PROCESSING,
+                PaymentStatus.FAILED,
+              ],
+            },
           },
           data: {
             status: PaymentStatus.COMPLETED,
             validationId,
             paidAt: new Date(),
-            failureReason: "STALE_SUCCESS_REQUIRES_REFUND_REVIEW",
+            failureReason: null,
           },
         });
-        await tx.paymentReconciliation.upsert({
-          where: { attemptId: attempt.id },
-          create: {
-            paymentId: payment.id,
-            attemptId: attempt.id,
-            reason: "STALE_SUCCESS_REQUIRES_REFUND_REVIEW",
+        if (claimedAttempt.count !== 1) {
+          // Another callback/expiry transition won the claim. Never update the
+          // parent Payment after failing to claim its exact attempt.
+          throw new AppError("Payment attempt changed before completion", 409);
+        }
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            transactionId,
+            status: PaymentStatus.COMPLETED,
             validationId,
-            amount: attempt.amount,
-            currency: attempt.currency,
+            gatewaySessionId: attempt.gatewaySessionId,
+            gatewayPageUrl: attempt.gatewayPageUrl,
+            paidAt: new Date(),
           },
-          update: { validationId, reason: "STALE_SUCCESS_REQUIRES_REFUND_REVIEW" },
         });
-        return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
-      }
-
-      const request = await tx.rentalRequest.findUnique({
-        where: { id: payment.rentalRequestId },
-        select: { status: true },
-      });
-      if (!request || (request.status !== RentalRequestStatus.APPROVED &&
-        request.status !== RentalRequestStatus.ACTIVE)) {
-        // The customer may have paid after the reservation expired. Do not
-        // activate a rejected request; the validated charge remains auditable
-        // through the reconciliation path instead of being discarded.
-        throw new Error("Rental request is no longer payable");
-      }
-      if (request.status === RentalRequestStatus.APPROVED) {
-        // Claim APPROVED -> ACTIVE conditionally. If expiry won the race,
-        // count is zero and the surrounding transaction rolls back payment
-        // completion instead of creating a paid-but-rejected rental.
-        const activation = await tx.rentalRequest.updateMany({
-          where: { id: payment.rentalRequestId, status: RentalRequestStatus.APPROVED },
-          data: { status: RentalRequestStatus.ACTIVE },
+        await tx.paymentAttempt.updateMany({
+          where: {
+            paymentId: payment.id,
+            id: { not: attempt.id },
+            status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
+          },
+          data: {
+            status: PaymentStatus.CANCELLED,
+            failureReason: "ANOTHER_ATTEMPT_COMPLETED",
+          },
         });
-        if (activation.count !== 1) throw new Error("Rental request is no longer payable");
-      }
-      const claimedAttempt = await tx.paymentAttempt.updateMany({
-        where: {
-          id: attempt.id,
-          transactionId,
-          status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING, PaymentStatus.FAILED] },
-        },
-        data: {
-          status: PaymentStatus.COMPLETED, validationId, paidAt: new Date(),
-          failureReason: null,
-        },
-      });
-      if (claimedAttempt.count !== 1) {
-        // Another callback/expiry transition won the claim. Never update the
-        // parent Payment after failing to claim its exact attempt.
-        throw new Error("Payment attempt changed before completion");
-      }
-      await tx.payment.update({
-        where: { id: payment.id },
-        data: {
-          transactionId, status: PaymentStatus.COMPLETED, validationId,
-          gatewaySessionId: attempt.gatewaySessionId,
-          gatewayPageUrl: attempt.gatewayPageUrl, paidAt: new Date(),
-        },
-      });
-      await tx.paymentAttempt.updateMany({
-        where: {
-          paymentId: payment.id, id: { not: attempt.id },
-          status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
-        },
-        data: { status: PaymentStatus.CANCELLED, failureReason: "ANOTHER_ATTEMPT_COMPLETED" },
-      });
-      return tx.payment.findUnique({ where: { id: payment.id }, select: paymentSelect });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        return tx.payment.findUnique({
+          where: { id: payment.id },
+          select: paymentSelect,
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   private async markAttemptFailed(transactionId: string, reason: string) {
@@ -1403,7 +1566,7 @@ export class PaymentsService {
 
     if (!transactionId || !validationId) {
       // Without both values, the server cannot identify and verify a payment.
-      throw new Error("tran_id and val_id are required");
+      throw new AppError("tran_id and val_id are required", 400);
     }
 
     const gatewayStatus = this.readString(payload, "status");
@@ -1414,7 +1577,7 @@ export class PaymentsService {
     ) {
       // FAILED/CANCELLED/EXPIRED notifications must use failPayment(), not the
       // success path.
-      throw new Error("Gateway payment is not successful");
+      throw new AppError("Gateway payment is not successful", 400);
     }
 
     const attempt = await prisma.paymentAttempt.findUnique({
@@ -1431,7 +1594,7 @@ export class PaymentsService {
     if (!attempt) {
       // This can be a forged, malformed, or unknown transaction ID. It must not
       // create a new database record during confirmation.
-      throw new Error("Payment attempt not found");
+      throw new AppError("Payment attempt not found", 404);
     }
 
     if (attempt.status === PaymentStatus.COMPLETED) {
@@ -1441,16 +1604,20 @@ export class PaymentsService {
     }
 
     if (attempt.status === PaymentStatus.REFUNDED) {
-      throw new Error("Refunded payment attempts cannot be confirmed");
+      throw new AppError("Refunded payment attempts cannot be confirmed", 409);
     }
 
     // CANCELLED attempts are still gateway-validated; completion preserves
     // cancellation and records refund-review work for a verified charge.
     if (attempt.status !== PaymentStatus.CANCELLED) {
       const processingAttempt = await this.markAttemptProcessing(transactionId);
-      if (!processingAttempt) throw new Error("Payment attempt not found");
+      if (!processingAttempt)
+        throw new AppError("Payment attempt not found", 404);
       if (processingAttempt.status === PaymentStatus.REFUNDED) {
-        throw new Error("Refunded payment attempts cannot be confirmed");
+        throw new AppError(
+          "Refunded payment attempts cannot be confirmed",
+          409,
+        );
       }
     }
 
@@ -1466,7 +1633,7 @@ export class PaymentsService {
       // SSLCommerz answered, but did not confirm the payment. Record the failed
       // verification and keep the rental request retryable.
       await this.markAttemptFailed(transactionId, "GATEWAY_VALIDATION_FAILED");
-      throw new Error("SSLCommerz validation failed");
+      throw new AppError("SSLCommerz validation failed", 400);
     }
 
     // Step 2: bind the provider response to this exact local attempt.
@@ -1474,7 +1641,7 @@ export class PaymentsService {
       // A valid val_id for a different transaction must never complete this
       // attempt.
       await this.markAttemptFailed(transactionId, "TRANSACTION_ID_MISMATCH");
-      throw new Error("Gateway transaction ID does not match");
+      throw new AppError("Gateway transaction ID does not match", 400);
     }
 
     // Step 3: verify amount and currency before changing any business state.
@@ -1482,7 +1649,7 @@ export class PaymentsService {
       // The amount is calculated from the property rent in our database. A
       // different gateway amount indicates tampering or a gateway mismatch.
       await this.markAttemptFailed(transactionId, "AMOUNT_MISMATCH");
-      throw new Error("Gateway amount does not match payment amount");
+      throw new AppError("Gateway amount does not match payment amount", 400);
     }
 
     const validationCurrency = (validation.currency ?? validation.currency_type)
@@ -1492,7 +1659,10 @@ export class PaymentsService {
     if (validationCurrency !== attempt.currency.trim().toUpperCase()) {
       // Currency mismatch is also a hard rejection; no rental activation occurs.
       await this.markAttemptFailed(transactionId, "CURRENCY_MISMATCH");
-      throw new Error("Gateway currency does not match payment currency");
+      throw new AppError(
+        "Gateway currency does not match payment currency",
+        400,
+      );
     }
 
     // Step 4: reject risky responses; only a fully validated payment may
@@ -1502,7 +1672,7 @@ export class PaymentsService {
       // records it as failed with a manual-review reason. A later risk-review
       // module could introduce a dedicated REVIEW status.
       await this.markAttemptFailed(transactionId, "RISK_REVIEW_REQUIRED");
-      throw new Error("Risky payment requires manual verification");
+      throw new AppError("Risky payment requires manual verification", 409);
     }
 
     return this.completePayment(transactionId, validationId);
@@ -1526,92 +1696,102 @@ export class PaymentsService {
      * The approved rental request and property reservation are intentionally
      * kept unchanged so the tenant can retry.
      */
-    return prisma.$transaction(async (tx) => {
-      const attempt = await tx.paymentAttempt.findUnique({
-        where: { transactionId },
-        select: {
-          id: true,
-          paymentId: true,
-          status: true,
-        },
-      });
+    return prisma.$transaction(
+      async (tx) => {
+        const attempt = await tx.paymentAttempt.findUnique({
+          where: { transactionId },
+          select: {
+            id: true,
+            paymentId: true,
+            status: true,
+          },
+        });
 
-      if (!attempt) {
-        // An unknown transaction must not change any payment or rental record.
-        throw new Error("Payment attempt not found");
-      }
+        if (!attempt) {
+          // An unknown transaction must not change any payment or rental record.
+          throw new AppError("Payment attempt not found", 404);
+        }
 
-      if (
-        attempt.status === PaymentStatus.COMPLETED ||
-        attempt.status === PaymentStatus.REFUNDED
-      ) {
-        // A late failure notification must never downgrade a payment that was
-        // already successfully completed or refunded.
+        if (
+          attempt.status === PaymentStatus.COMPLETED ||
+          attempt.status === PaymentStatus.REFUNDED
+        ) {
+          // A late failure notification must never downgrade a payment that was
+          // already successfully completed or refunded.
+          return tx.payment.findUnique({
+            where: { id: attempt.paymentId },
+            select: paymentSelect,
+          });
+        }
+
+        if (
+          attempt.status === PaymentStatus.FAILED ||
+          attempt.status === PaymentStatus.CANCELLED
+        ) {
+          // Duplicate IPN/callback notifications are expected. Returning the
+          // existing result makes failure handling idempotent.
+          return tx.payment.findUnique({
+            where: { id: attempt.paymentId },
+            select: paymentSelect,
+          });
+        }
+
+        const attemptUpdate = await tx.paymentAttempt.updateMany({
+          where: {
+            id: attempt.id,
+            status: {
+              in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING],
+            },
+          },
+          data: {
+            status,
+            failureReason:
+              status === PaymentStatus.CANCELLED
+                ? "CUSTOMER_OR_GATEWAY_CANCELLED"
+                : "BANK_OR_GATEWAY_FAILED",
+          },
+        });
+
+        if (attemptUpdate.count !== 1) {
+          return tx.payment.findUnique({
+            where: { id: attempt.paymentId },
+            select: paymentSelect,
+          });
+        }
+
+        /*
+         * This updates the summary row only if this is still the current attempt.
+         *
+         * Example:
+         *   Payment.transactionId = RN-NEW
+         *   old callback arrives for RN-OLD
+         *
+         * RN-OLD is still marked failed in PaymentAttempt, but the summary row is
+         * not changed because RN-OLD is no longer the current transaction. Older
+         * attempts must not change the result of a newer retry.
+         */
+        await tx.payment.updateMany({
+          where: {
+            id: attempt.paymentId, //this is important
+            transactionId,
+            status: {
+              in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING],
+            },
+          },
+          data: { status },
+        });
+
+        // Keep RentalRequest APPROVED and Property unavailable. A separate expiry
+        // process should eventually release the reservation if payment is never
+        // completed; releasing it immediately would make the approval/retry flow
+        // inconsistent.
         return tx.payment.findUnique({
           where: { id: attempt.paymentId },
           select: paymentSelect,
         });
-      }
-
-      if (
-        attempt.status === PaymentStatus.FAILED ||
-        attempt.status === PaymentStatus.CANCELLED
-      ) {
-        // Duplicate IPN/callback notifications are expected. Returning the
-        // existing result makes failure handling idempotent.
-        return tx.payment.findUnique({
-          where: { id: attempt.paymentId },
-          select: paymentSelect,
-        });
-      }
-
-      await tx.paymentAttempt.updateMany({
-        where: {
-          id: attempt.id,
-          status: {
-            in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING],
-          },
-        },
-        data: {
-          status,
-          failureReason:
-            status === PaymentStatus.CANCELLED
-              ? "CUSTOMER_OR_GATEWAY_CANCELLED"
-              : "BANK_OR_GATEWAY_FAILED",
-        },
-      });
-
-      /*
-       * This updates the summary row only if this is still the current attempt.
-       *
-       * Example:
-       *   Payment.transactionId = RN-NEW
-       *   old callback arrives for RN-OLD
-       *
-       * RN-OLD is still marked failed in PaymentAttempt, but the summary row is
-       * not changed because RN-OLD is no longer the current transaction. Older
-       * attempts must not change the result of a newer retry.
-       */
-      await tx.payment.updateMany({
-        where: {
-          id: attempt.paymentId,//this is important
-          transactionId,
-          status: {
-            in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING],
-          },
-        },
-        data: { status },
-      });
-
-      // Keep RentalRequest APPROVED and Property unavailable. A separate expiry
-      // process should eventually release the reservation if payment is never
-      // completed; releasing it immediately would make the approval/retry flow
-      // inconsistent.
-      return tx.payment.findUnique({
-        where: { id: attempt.paymentId },
-        select: paymentSelect,
-      });
-    });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async handleIpn(payload: GatewayPayload) {
@@ -1629,14 +1809,14 @@ export class PaymentsService {
      */
     if (!this.verifyGatewaySignature(payload)) {
       // Do not process a forged notification.
-      throw new Error("Invalid SSLCommerz IPN signature");
+      throw new AppError("Invalid SSLCommerz IPN signature", 401);
     }
 
     const transactionId = this.readString(payload, "tran_id");
     const status = this.readString(payload, "status")?.toUpperCase();
 
     if (!transactionId || !status) {
-      throw new Error("Invalid SSLCommerz IPN payload");
+      throw new AppError("Invalid SSLCommerz IPN payload", 400);
     }
 
     if (["VALID", "VALIDATED"].includes(status)) {
@@ -1656,7 +1836,7 @@ export class PaymentsService {
       return this.failPayment(transactionId, PaymentStatus.CANCELLED);
     }
 
-    throw new Error("Unsupported SSLCommerz payment status");
+    throw new AppError("Unsupported SSLCommerz payment status", 400);
   }
 
   async handleFailureCallback(
@@ -1668,13 +1848,13 @@ export class PaymentsService {
     // server-to-server notification when it is available. Both paths call the
     // same idempotent failPayment() method.
     if (!this.verifyGatewaySignature(payload)) {
-      throw new Error("Invalid SSLCommerz callback signature");
+      throw new AppError("Invalid SSLCommerz callback signature", 401);
     }
 
     const transactionId = this.readString(payload, "tran_id");
 
     if (!transactionId) {
-      throw new Error("tran_id is required");
+      throw new AppError("tran_id is required", 400);
     }
 
     return this.failPayment(transactionId, status);
