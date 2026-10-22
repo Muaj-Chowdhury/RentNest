@@ -134,4 +134,15 @@ export class PaymentsController {
       data: payment,
     });
   });
+
+  expireReservations = catchAsync(async (_req: Request, res: Response) => {
+    const result = await paymentsService.expirePaymentReservations();
+
+    sendResponse(res, {
+      success: true,
+      statusCode: 200,
+      message: "Expired payment reservations processed",
+      data: result,
+    });
+  });
 }

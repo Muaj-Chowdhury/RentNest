@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Role } from "../../../generated/prisma/enums";
 import { auth } from "../../middlewares/auth";
+import { cronAuth } from "../../middlewares/cronAuth";
 import { PaymentsController } from "./payments.controller";
 
 const router = Router();
@@ -42,6 +43,12 @@ router.get(
   "/",
   auth(Role.TENANT, Role.LANDLORD, Role.ADMIN),
   paymentsController.getAllPayments,
+);
+
+router.get(
+  "/expire-reservations",
+  cronAuth,
+  paymentsController.expireReservations,
 );
 
 router.get(

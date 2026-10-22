@@ -28,11 +28,15 @@ export default {
     process.env.SSLCOMMERZ_UNCERTAIN_RETRY_AFTER_MS ?? 30_000,
   ),
   public_api_url: process.env.PUBLIC_API_URL!,
+  // Shared secret that protects the reservation-expiry endpoint. Vercel Cron
+  // sends it automatically as `Authorization: Bearer <CRON_SECRET>`; when it is
+  // unset the endpoint rejects every request.
+  cron_secret: process.env.CRON_SECRET!,
   // An approved property is reserved for this many minutes while the tenant
-  // gets a chance to complete payment. Thirty minutes is a practical sandbox
-  // default; production can choose a different value through .env.
+  // gets a chance to complete payment. One day (1440) pairs with a daily Vercel
+  // Cron schedule, which is the only frequency the Hobby plan allows.
   payment_reservation_expiry_minutes: Number(
-    process.env.PAYMENT_RESERVATION_EXPIRY_MINUTES ?? 30,
+    process.env.PAYMENT_RESERVATION_EXPIRY_MINUTES ?? 1440,
   ),
   // How often the background expiry worker checks for old APPROVED requests.
   payment_reservation_expiry_check_interval_ms: Number(
