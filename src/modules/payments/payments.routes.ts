@@ -57,4 +57,10 @@ router.get(
   paymentsController.getPaymentById,
 );
 
+router.post(
+  "/:id/reconcile",
+  auth(Role.TENANT, Role.LANDLORD, Role.ADMIN),
+  paymentsController.reconcilePayment,
+);
+
 export const paymentRoutes = router;

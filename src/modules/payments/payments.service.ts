@@ -56,6 +56,12 @@ type SSLValidationResponse = {
   risk_level?: string;
 };
 
+type SSLTransactionQueryResponse = {
+  APIConnect?: string;
+  no_of_trans_found?: string | number;
+  element?: Array<SSLValidationResponse>;
+};
+
 class GatewayRequestUncertainError extends Error {
   readonly code = "GATEWAY_REQUEST_UNCERTAIN";
   readonly statusCode = 503;
@@ -183,6 +189,14 @@ export class PaymentsService {
     return config.sslcommerz_env === "production"
       ? "https://securepay.sslcommerz.com/validator/api/validationserverAPI.php"
       : "https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php";
+  }
+
+  private getTransactionQueryUrl() {
+    // This lookup recovers interrupted callbacks/validations without creating
+    // another checkout session for the same rental.
+    return config.sslcommerz_env === "production"
+      ? "https://securepay.sslcommerz.com/validator/api/merchantTransIDvalidationAPI.php"
+      : "https://sandbox.sslcommerz.com/validator/api/merchantTransIDvalidationAPI.php";
   }
 
   private getCallbackUrl(path: string) {
@@ -410,6 +424,43 @@ export class PaymentsService {
     }
 
     return (await response.json()) as SSLValidationResponse;
+  }
+
+  private async queryTransactionWithGateway(
+    transactionId: string,
+  ): Promise<SSLValidationResponse | null> {
+    const url = new URL(this.getTransactionQueryUrl());
+    url.searchParams.set("tran_id", transactionId);
+    url.searchParams.set("store_id", config.sslcommerz_store_id);
+    url.searchParams.set("store_passwd", config.sslcommerz_store_password);
+    url.searchParams.set("format", "json");
+    url.searchParams.set("v", "1");
+
+    const response = await this.fetchWithTimeout(url);
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new GatewayValidationError(
+        `SSLCommerz transaction query failed with HTTP ${response.status}: ${body.slice(0, 500) || response.statusText}`,
+      );
+    }
+
+    let result: SSLTransactionQueryResponse;
+    try {
+      result = (await response.json()) as SSLTransactionQueryResponse;
+    } catch {
+      throw new GatewayRequestUncertainError(
+        "SSLCommerz returned an unreadable transaction status. The payment remains uncertain; please retry reconciliation.",
+      );
+    }
+
+    if (result.APIConnect && result.APIConnect !== "DONE") {
+      throw new GatewayValidationError(
+        `SSLCommerz transaction query was not accepted: ${result.APIConnect}`,
+      );
+    }
+
+    // An empty result is not proof of failure; propagation can be delayed.
+    return result.element?.[0] ?? null;
   }
 
   async createPayment(payload: ICreatePaymentPayload, tenantId: string) {
@@ -995,6 +1046,116 @@ export class PaymentsService {
     }
 
     return payment;
+  }
+
+  async reconcilePayment(id: string, actor: PaymentActor) {
+    /*
+     * Recovery for a validation timeout. This endpoint only queries the
+     * already-created SSLCommerz transaction; it never creates a new session.
+     * VALID/VALIDATED completes through the normal validation path, FAILED /
+     * CANCELLED closes this attempt, and PENDING/unknown stays protected.
+     */
+    const payment = await this.getPaymentById(id, actor);
+    const attempt = payment.attempts.find(
+      (candidate) => candidate.transactionId === payment.transactionId,
+    );
+
+    if (!attempt) {
+      throw new AppError("Current payment attempt not found", 409);
+    }
+
+    if (attempt.status === PaymentStatus.COMPLETED) {
+      return {
+        payment,
+        gatewayStatus: "COMPLETED",
+        reconciled: true,
+        message: "Payment is already completed.",
+      };
+    }
+
+    let gatewayResult: SSLValidationResponse | null;
+    try {
+      gatewayResult = await this.queryTransactionWithGateway(
+        payment.transactionId,
+      );
+    } catch (error) {
+      // Query failure does not prove that the customer was not charged.
+      await this.markAttemptValidationUncertain(payment.transactionId);
+      return {
+        payment: await this.getPaymentById(id, actor),
+        gatewayStatus: "UNKNOWN",
+        reconciled: false,
+        retryable: true,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Gateway status could not be determined; please retry reconciliation.",
+      };
+    }
+
+    if (!gatewayResult) {
+      await this.markAttemptValidationUncertain(payment.transactionId);
+      return {
+        payment: await this.getPaymentById(id, actor),
+        gatewayStatus: "PENDING",
+        reconciled: false,
+        retryable: true,
+        message:
+          "SSLCommerz has not returned a final result yet. No new payment session should be created.",
+      };
+    }
+
+    const gatewayStatus = gatewayResult.status?.toUpperCase();
+    if (["VALID", "VALIDATED"].includes(gatewayStatus ?? "")) {
+      if (!gatewayResult.val_id) {
+        await this.markAttemptValidationUncertain(payment.transactionId);
+        return {
+          payment: await this.getPaymentById(id, actor),
+          gatewayStatus,
+          reconciled: false,
+          retryable: true,
+          message:
+            "SSLCommerz confirmed success without a validation ID; manual reconciliation is required.",
+        };
+      }
+
+      const completed = await this.confirmPayment({
+        tran_id: payment.transactionId,
+        val_id: gatewayResult.val_id,
+        status: gatewayStatus,
+      });
+      return {
+        payment: completed,
+        gatewayStatus,
+        reconciled: true,
+        message: "Gateway result confirmed and payment state updated.",
+      };
+    }
+
+    if (["FAILED", "CANCELLED", "EXPIRED", "UNATTEMPTED"].includes(gatewayStatus ?? "")) {
+      const failed = await this.failPayment(
+        payment.transactionId,
+        gatewayStatus === "FAILED"
+          ? PaymentStatus.FAILED
+          : PaymentStatus.CANCELLED,
+      );
+      return {
+        payment: failed,
+        gatewayStatus,
+        reconciled: true,
+        message: "Gateway confirmed that this payment did not complete.",
+      };
+    }
+
+    await this.markAttemptValidationUncertain(payment.transactionId);
+    return {
+      payment: await this.getPaymentById(id, actor),
+      gatewayStatus: gatewayStatus ?? "UNKNOWN",
+      reconciled: false,
+      retryable: true,
+      message:
+        "The gateway returned a non-final status. The payment remains protected from duplicate checkout.",
+    };
   }
 
   private async completePayment(transactionId: string, validationId: string) {

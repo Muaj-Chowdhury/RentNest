@@ -74,6 +74,19 @@ export class PaymentsController {
     });
   });
 
+  reconcilePayment = catchAsync(async (req: Request, res: Response) => {
+    const actor = getActor(req);
+    const id = typeof req.params.id === "string" ? req.params.id : "";
+    const result = await paymentsService.reconcilePayment(id, actor);
+
+    sendResponse(res, {
+      success: true,
+      statusCode: 200,
+      message: result.message,
+      data: result,
+    });
+  });
+
   confirmPayment = catchAsync(async (req: Request, res: Response) => {
     const payment = await paymentsService.confirmPayment(req.body);
 
