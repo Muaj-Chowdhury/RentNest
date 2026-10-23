@@ -66,6 +66,16 @@ class GatewayRequestUncertainError extends Error {
   }
 }
 
+class GatewayValidationError extends Error {
+  readonly code = "GATEWAY_VALIDATION_ERROR";
+  readonly statusCode = 502;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayValidationError";
+  }
+}
+
 class PaymentSessionInProgressError extends Error {
   readonly statusCode = 409;
 
@@ -390,7 +400,13 @@ export class PaymentsService {
     const response = await this.fetchWithTimeout(url);
 
     if (!response.ok) {
-      throw new Error("Unable to validate payment with SSLCommerz");
+      // The gateway rejected the validation request. Its body explains why
+      // (unknown/consumed val_id, store credential problem, gateway outage),
+      // so it is read here instead of being discarded.
+      const body = await response.text().catch(() => "");
+      throw new GatewayValidationError(
+        `SSLCommerz validation failed with HTTP ${response.status}: ${body.slice(0, 500) || response.statusText}`,
+      );
     }
 
     return (await response.json()) as SSLValidationResponse;
@@ -519,10 +535,13 @@ export class PaymentsService {
         // a second charge or race the in-flight result. Fail closed first.
         if (
           existingPayment &&
-          latestAttempt?.failureReason === "PAYMENT_VALIDATION_IN_PROGRESS"
+          (latestAttempt?.failureReason === "PAYMENT_VALIDATION_IN_PROGRESS" ||
+            latestAttempt?.failureReason === "GATEWAY_VALIDATION_UNCERTAIN")
         ) {
           throw new PaymentSessionInProgressError(
-            "Payment validation is still in progress. Please wait for the gateway result.",
+            latestAttempt.failureReason === "GATEWAY_VALIDATION_UNCERTAIN"
+              ? "Gateway validation is uncertain. Please wait for reconciliation before starting another payment."
+              : "Payment validation is still in progress. Please wait for the gateway result.",
           );
         }
 
@@ -580,6 +599,7 @@ export class PaymentsService {
           !latestAttempt.gatewaySessionId &&
           !latestAttempt.validationId &&
           latestAttempt.failureReason !== "PAYMENT_VALIDATION_IN_PROGRESS" &&
+          latestAttempt.failureReason !== "GATEWAY_VALIDATION_UNCERTAIN" &&
           (existingPayment.status === PaymentStatus.PENDING ||
             existingPayment.status === PaymentStatus.PROCESSING) &&
           (latestAttempt.status === PaymentStatus.PENDING ||
@@ -1353,6 +1373,24 @@ export class PaymentsService {
     });
   }
 
+  private async markAttemptValidationUncertain(transactionId: string) {
+    /*
+     * A timeout, network error, malformed response, or HTTP error from the
+     * validator does not prove that the customer was not charged. Keep the
+     * attempt PROCESSING with an explicit reason instead of marking it FAILED
+     * and allowing a second checkout to create a duplicate charge.
+     */
+    await prisma.paymentAttempt.updateMany({
+      where: {
+        transactionId,
+        status: PaymentStatus.PROCESSING,
+      },
+      data: {
+        failureReason: "GATEWAY_VALIDATION_UNCERTAIN",
+      },
+    });
+  }
+
   private async markAttemptProcessing(transactionId: string) {
     /*
      * PROCESSING means that we have received a possible success and are
@@ -1624,7 +1662,24 @@ export class PaymentsService {
     // Step 1: ask SSLCommerz for the authoritative transaction result. This is
     // required even for locally CANCELLED attempts because money may already
     // have been collected before the browser/IPN reached us.
-    const validation = await this.validateWithGateway(validationId);
+    let validation: SSLValidationResponse;
+    try {
+      validation = await this.validateWithGateway(validationId);
+    } catch (error) {
+      // The validation request failed before SSLCommerz gave us a definitive
+      // status. Keep the attempt PROCESSING with an explicit uncertain reason:
+      // marking it FAILED could invite a second charge. A later IPN, admin
+      // confirmation, or reconciliation retry can resolve this attempt.
+      await this.markAttemptValidationUncertain(transactionId);
+      throw error instanceof GatewayValidationError
+        ? new AppError(error.message, 502)
+        : error instanceof GatewayRequestUncertainError
+          ? error
+          : new AppError(
+              "SSLCommerz validation could not be completed; reconciliation is required.",
+              503,
+            );
+    }
 
     if (
       !validation.status ||
