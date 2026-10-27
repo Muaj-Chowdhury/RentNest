@@ -28,6 +28,10 @@ export default {
     process.env.SSLCOMMERZ_UNCERTAIN_RETRY_AFTER_MS ?? 30_000,
   ),
   public_api_url: process.env.PUBLIC_API_URL!,
+  // Frontend page the tenant's browser lands on after SSLCommerz checkout.
+  // The backend appends paymentId, status and message as query parameters.
+  payment_result_url:
+    process.env.PAYMENT_RESULT_URL ?? `${process.env.APP_URL}/payment/result`,
   // Shared secret that protects the reservation-expiry endpoint. Vercel Cron
   // sends it automatically as `Authorization: Bearer <CRON_SECRET>`; when it is
   // unset the endpoint rejects every request.

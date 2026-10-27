@@ -38,6 +38,15 @@ export const startPaymentReservationExpiryJob = () => {
           `[payment-expiry] Next check in ${intervalMs} ms`,
         )
       }
+
+      if (result.skippedRequestIds.length > 0) {
+        // These reservations are kept because SSLCommerz could not confirm
+        // whether their open attempt was charged. The next run asks again.
+        console.warn(
+          `[payment-expiry] Kept ${result.skippedRequestIds.length} reservation(s) pending gateway confirmation`,
+          result.skippedRequestIds,
+        );
+      }
     } catch (error) {
       // A failed cleanup pass must not crash the API process. The next
       // interval will retry, and the error remains visible in server logs.

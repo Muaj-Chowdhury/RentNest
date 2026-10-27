@@ -9,16 +9,19 @@ import { AppError } from "../../errors/AppError";
 export class AuthService {
   async register(payload: RegisterUserPayload) {
     // Business logic for user registration
-    const { name, email, password, role = Role.TENANT } = payload;
+    const { name, email, password, role = Role.TENANT } = payload ?? {};
 
+    if (!name || !email || !password) {
+      throw new AppError("name, email and password are required", 400);
+    }
     if (role !== Role.TENANT && role !== Role.LANDLORD) {
-      throw new Error("Only TENANT or LANDLORD roles can be selected");
+      throw new AppError("Only TENANT or LANDLORD roles can be selected", 400);
     }
     const existingUser = await prisma.user.findUnique({
       where: { email },
     });
     if (existingUser) {
-      throw new Error("User already exists");
+      throw new AppError("User already exists", 409);
     }
     const hashedPassword = await bcrypt.hash(password, 10);
 

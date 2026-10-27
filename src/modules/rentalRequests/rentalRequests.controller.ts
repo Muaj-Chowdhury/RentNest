@@ -15,7 +15,7 @@ const rentalRequestsService = new RentalRequestsService();
 export class RentalRequestsController {
   getAllRequests = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
 
     const statusParam = req.query.status
@@ -25,7 +25,7 @@ export class RentalRequestsController {
     const validStatuses = Object.values(RentalRequestStatus) as string[];
 
     if (statusParam && !validStatuses.includes(statusParam)) {
-      throw new Error("Invalid rental request status");
+      throw new AppError("Invalid rental request status", 400);
     }
 
     const query: IRentalRequestQuery = {
@@ -47,7 +47,7 @@ export class RentalRequestsController {
 
   getRequestById = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
 
     const id = typeof req.params.id === "string" ? req.params.id : "";
@@ -65,7 +65,7 @@ export class RentalRequestsController {
   createRequest = catchAsync(async (req: Request, res: Response) => {
     const tenantId = typeof req.user?.id === "string" ? req.user?.id : "";
     if (!tenantId) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
     const request = await rentalRequestsService.createRequest(
       req.body,
@@ -82,9 +82,9 @@ export class RentalRequestsController {
   updateRequestStatus = catchAsync(async (req: Request, res: Response) => {
     const id = typeof req.params.id === "string" ? req.params.id : "";
     if (!id) {
-      throw new Error("Request ID is required");
+      throw new AppError("Request ID is required", 400);
     }
-    if (!req.body.status) throw new Error("Status is required");
+    if (!req.body.status) throw new AppError("Status is required", 400);
 
     // Create an object map for instant validation and proper type matching
     const statusMap: Record<string, RentalRequestStatusField> = {
@@ -96,11 +96,11 @@ export class RentalRequestsController {
     const status = statusMap[normalizedStatus];
 
     if (!status) {
-      throw new Error("Status must be APPROVED or REJECTED");
+      throw new AppError("Status must be APPROVED or REJECTED", 400);
     }
 
     if (!req.user) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
     const updatedRequest = await rentalRequestsService.updateRequestStatus(
       id,

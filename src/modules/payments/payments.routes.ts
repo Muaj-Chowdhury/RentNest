@@ -57,9 +57,11 @@ router.get(
   paymentsController.getPaymentById,
 );
 
+// Landlords can view payments but not drive gateway queries or payment state
+// changes on a tenant's checkout.
 router.post(
   "/:id/reconcile",
-  auth(Role.TENANT, Role.LANDLORD, Role.ADMIN),
+  auth(Role.TENANT, Role.ADMIN),
   paymentsController.reconcilePayment,
 );
 

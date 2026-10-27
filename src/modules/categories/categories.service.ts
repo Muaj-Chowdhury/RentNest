@@ -14,7 +14,7 @@ export class CategoriesService {
     const normalizedName = name.trim();
 
     if (!normalizedName) {
-      throw new Error("Category name is required");
+      throw new AppError("Category name is required", 400);
     }
 
     const isCategoryExists = await prisma.category.findFirst({
@@ -22,7 +22,7 @@ export class CategoriesService {
     });
 
     if (isCategoryExists) {
-      throw new Error("Category already exists");
+      throw new AppError("Category already exists", 409);
     }
 
     return prisma.category.create({
@@ -35,14 +35,14 @@ export class CategoriesService {
     const normalizedName = name.trim();
 
     if (!normalizedName) {
-      throw new Error("Category name is required");
+      throw new AppError("Category name is required", 400);
     }
 
     const existingCategory = await prisma.category.findUnique({
       where: { id },
     });
     if (!existingCategory) {
-      throw new Error("Category not found");
+      throw new AppError("Category not found", 404);
     }
 
     const duplicateCategory = await prisma.category.findFirst({
@@ -50,7 +50,7 @@ export class CategoriesService {
     });
 
     if (duplicateCategory) {
-      throw new Error("Category already exists");
+      throw new AppError("Category already exists", 409);
     }
 
     return prisma.category.update({

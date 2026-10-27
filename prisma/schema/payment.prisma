@@ -62,14 +62,17 @@ model PaymentReconciliation {
 
   status       PaymentReconciliationStatus @default(REFUND_REVIEW_REQUIRED)
   reason       String
-  validationId String
+  // One row per verified gateway charge. A single transaction can be paid
+  // more than once (the tenant reopens the same checkout page), so val_id,
+  // not the attempt, identifies the charge.
+  validationId String  @unique
   amount       Decimal @db.Decimal(10, 2)
   currency     String  @db.VarChar(3)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([attemptId])
+  @@index([attemptId])
   @@index([paymentId])
   @@index([status])
   @@map("payment_reconciliations")

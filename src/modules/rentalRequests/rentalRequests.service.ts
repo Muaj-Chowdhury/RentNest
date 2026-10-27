@@ -91,7 +91,7 @@ export class RentalRequestsService {
 
   async getRequestById(id: string, actor: RequestActor) {
     if (!id) {
-      throw new Error("Request ID is required");
+      throw new AppError("Request ID is required", 400);
     }
     const roleFilters: Record<Role, Prisma.RentalRequestWhereInput> = {
       [Role.TENANT]: { tenantId: actor.id },
@@ -147,7 +147,7 @@ export class RentalRequestsService {
     });
 
     if (!request) {
-      throw new Error("Rental request not found");
+      throw new AppError("Rental request not found", 404);
     }
 
     return request;
@@ -167,14 +167,14 @@ export class RentalRequestsService {
     });
 
     if (!property) {
-      throw new Error("Property not found");
+      throw new AppError("Property not found", 404);
     }
 
     if (!property.available) {
-      throw new Error("Property is not available for rent");
+      throw new AppError("Property is not available for rent", 409);
     }
     if (property.landlordId === tenantId) {
-      throw new Error("You cannot request your own property");
+      throw new AppError("You cannot request your own property", 403);
     }
     const existingRequest = await prisma.rentalRequest.findFirst({
       where: {
@@ -186,8 +186,9 @@ export class RentalRequestsService {
       },
     });
     if (existingRequest) {
-      throw new Error(
+      throw new AppError(
         "You already have an active request for this property. You cannot request this property",
+        409,
       );
     }
     return prisma.rentalRequest.create({
@@ -211,8 +212,9 @@ export class RentalRequestsService {
     actor: RequestActor,
   ) {
     if (actor.role !== Role.LANDLORD && actor.role !== Role.ADMIN) {
-      throw new Error(
+      throw new AppError(
         "Unauthorized. Only landlords and admins can update request status",
+        403,
       );
     }
 
@@ -232,19 +234,20 @@ export class RentalRequestsService {
         });
 
         if (!request) {
-          throw new Error("Rental request not found");
+          throw new AppError("Rental request not found", 404);
         }
 
         if (
           actor.role !== Role.ADMIN &&
           request.property.landlordId !== actor.id
         ) {
-          throw new Error("Unauthorized to update this rental request");
+          throw new AppError("Unauthorized to update this rental request", 403);
         }
 
         if (request.status !== RentalRequestStatus.PENDING) {
-          throw new Error(
+          throw new AppError(
             `Cannot update status. Current status is ${request.status}`,
+            409,
           );
         }
 
@@ -260,7 +263,7 @@ export class RentalRequestsService {
           });
 
           if (reservedProperty.count === 0) {
-            throw new Error("Property is no longer available for rent");
+            throw new AppError("Property is no longer available for rent", 409);
           }
         }
 
@@ -280,7 +283,7 @@ export class RentalRequestsService {
         });
 
         if (updatedRequest.count === 0) {
-          throw new Error("Only pending requests can be approved or rejected");
+          throw new AppError("Only pending requests can be approved or rejected", 409);
         }
 
         if (status === RentalRequestStatus.APPROVED) {

@@ -39,6 +39,9 @@ enum PaymentStatus {
   COMPLETED
   FAILED
   CANCELLED
+  // Money was captured for this payment's current transaction, but the
+  // rental could not be activated (it closed first). Must be refunded.
+  REFUND_REQUIRED
   REFUNDED
 }
 

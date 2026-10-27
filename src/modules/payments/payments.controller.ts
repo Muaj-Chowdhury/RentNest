@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { Role } from "../../../generated/prisma/enums";
+import config from "../../config";
 import { catchAsync } from "../../utils/catchAsync";
 import { sendResponse } from "../../utils/sendResponse";
 import { PaymentsService } from "./payments.service";
@@ -17,6 +17,19 @@ const getActor = (req: Request) => {
     id: req.user.id,
     role: req.user.role,
   };
+};
+
+const redirectToResultPage = (
+  res: Response,
+  result: { paymentId: string | null; status: string; message: string },
+) => {
+  const url = new URL(config.payment_result_url);
+
+  if (result.paymentId) url.searchParams.set("paymentId", result.paymentId);
+  url.searchParams.set("status", result.status);
+  url.searchParams.set("message", result.message);
+
+  res.redirect(303, url.toString());
 };
 
 export class PaymentsController {
@@ -109,43 +122,28 @@ export class PaymentsController {
     });
   });
 
+  // SSLCommerz POSTs the tenant's browser to these three URLs. They redirect
+  // (303, so the browser follows with GET) to the frontend result page
+  // instead of leaving the tenant on a raw JSON response.
   handleSuccess = catchAsync(async (req: Request, res: Response) => {
-    const payment = await paymentsService.confirmPayment(req.body);
-
-    sendResponse(res, {
-      success: true,
-      statusCode: 200,
-      message: "Payment successful",
-      data: payment,
-    });
+    redirectToResultPage(
+      res,
+      await paymentsService.handleBrowserCallback(req.body, "success"),
+    );
   });
 
   handleFail = catchAsync(async (req: Request, res: Response) => {
-    const payment = await paymentsService.handleFailureCallback(
-      req.body,
-      "FAILED",
+    redirectToResultPage(
+      res,
+      await paymentsService.handleBrowserCallback(req.body, "fail"),
     );
-
-    sendResponse(res, {
-      success: true,
-      statusCode: 200,
-      message: "Payment failed",
-      data: payment,
-    });
   });
 
   handleCancel = catchAsync(async (req: Request, res: Response) => {
-    const payment = await paymentsService.handleFailureCallback(
-      req.body,
-      "CANCELLED",
+    redirectToResultPage(
+      res,
+      await paymentsService.handleBrowserCallback(req.body, "cancel"),
     );
-
-    sendResponse(res, {
-      success: true,
-      statusCode: 200,
-      message: "Payment cancelled",
-      data: payment,
-    });
   });
 
   expireReservations = catchAsync(async (_req: Request, res: Response) => {

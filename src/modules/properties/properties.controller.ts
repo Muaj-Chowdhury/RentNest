@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { PropertiesService } from "./properties.service";
 import { catchAsync } from "../../utils/catchAsync";
 import { sendResponse } from "../../utils/sendResponse";
+import { AppError } from "../../errors/AppError";
 import {
   IPropertyQuery,
   PropertySortField,
@@ -94,7 +95,7 @@ export class PropertiesController {
     const landlordId = req.user?.id;
 
     if (!landlordId) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
 
     const property = await propertiesService.createProperty(
@@ -113,13 +114,13 @@ export class PropertiesController {
     const landlordId = req.user?.id;
 
     if (!landlordId) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
 
     const payloads = Array.isArray(req.body) ? req.body : [];
 
     if (payloads.length === 0) {
-      throw new Error("No properties provided");
+      throw new AppError("No properties provided", 400);
     }
 
     const created = await propertiesService.createPropertiesBulk(
@@ -140,7 +141,7 @@ export class PropertiesController {
     const landlordId = req.user?.id;
 
     if (!landlordId) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
 
     const updatedProperty = await propertiesService.updateProperty(
@@ -161,7 +162,7 @@ export class PropertiesController {
     const propertyId = typeof req.params.id === "string" ? req.params.id : "";
 
     if (!landlordId) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
 
     const property = await propertiesService.updateAvailability(
@@ -183,7 +184,7 @@ export class PropertiesController {
     const landlordId = req.user?.id;
 
     if (!landlordId) {
-      throw new Error("Unauthorized");
+      throw new AppError("Unauthorized", 401);
     }
 
     const result = await propertiesService.deleteProperty(id, landlordId);

@@ -182,7 +182,7 @@ export class PropertiesService {
     });
 
     if (!property) {
-      throw new Error("Property not found");
+      throw new AppError("Property not found", 404);
     }
     return property;
   }
@@ -212,7 +212,7 @@ export class PropertiesService {
     landlordId: string,
   ) {
     if (!Array.isArray(payloads) || payloads.length === 0) {
-      throw new Error("No properties provided");
+      throw new AppError("No properties provided", 400);
     }
 
     const validatedPayloads = payloads.map((payload) => this.validatePayload(payload) as ICreatePropertyPayload);
@@ -252,7 +252,7 @@ export class PropertiesService {
     });
 
     if (!property) {
-      throw new Error("Property not found");
+      throw new AppError("Property not found", 404);
     }
 
     if (validated.categoryId) {
@@ -318,7 +318,7 @@ export class PropertiesService {
     });
 
     if (!property) {
-      throw new Error("Property not found");
+      throw new AppError("Property not found", 404);
     }
 
     const [rentalCount, reviewCount] = await Promise.all([
