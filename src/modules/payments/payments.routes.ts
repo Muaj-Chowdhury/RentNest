@@ -45,6 +45,13 @@ router.get(
   paymentsController.getAllPayments,
 );
 
+// Fallback landing page for the browser callbacks while there is no frontend.
+// Point PAYMENT_RESULT_URL here; it must stay above "/:id".
+router.get(
+  "/result",
+  paymentsController.showResult,
+);
+
 router.get(
   "/expire-reservations",
   cronAuth,

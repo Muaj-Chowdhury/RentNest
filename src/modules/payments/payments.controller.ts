@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { PaymentStatus } from "../../../generated/prisma/enums";
 import config from "../../config";
 import { catchAsync } from "../../utils/catchAsync";
 import { sendResponse } from "../../utils/sendResponse";
@@ -144,6 +145,21 @@ export class PaymentsController {
       res,
       await paymentsService.handleBrowserCallback(req.body, "cancel"),
     );
+  });
+
+  // Shows the outcome the callbacks put in the redirect. The query string is
+  // only informational; GET /api/payments/:id is the source of truth.
+  showResult = catchAsync(async (req: Request, res: Response) => {
+    const read = (key: string) =>
+      typeof req.query[key] === "string" ? req.query[key] : null;
+    const status = read("status") ?? "UNKNOWN";
+
+    sendResponse(res, {
+      success: status === PaymentStatus.COMPLETED,
+      statusCode: 200,
+      message: read("message") ?? "No payment result was provided.",
+      data: { paymentId: read("paymentId"), status },
+    });
   });
 
   expireReservations = catchAsync(async (_req: Request, res: Response) => {
